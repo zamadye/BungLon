@@ -72,9 +72,14 @@ Assets/
 2. Di Unity: **Window → Photon → Photon Unity Networking → Highlight Settings**
    (atau pilih aset `Assets/Photon/PhotonUnityNetworking/Resources/PhotonServerSettings.asset`).
 3. Isi field **App ID Realtime**. Sekalian atur:
-   - **Region**: `Best Region` (atau `ASIA` untuk pemain Indonesia — latency lebih stabil).
+   - **Region**: kosongkan = PUN otomatis memilih *Best Region*. Untuk game ini **disarankan diisi
+     `asia`** (field *Fixed Region* di `PhotonServerSettings`) supaya semua pemain Indonesia masuk
+     region yang sama — room yang dibuat di `asia` tidak akan terlihat oleh klien yang connect ke
+     `jp`/`eu`. Setelah mengubah, tekan tombol **Reset** di PhotonServerSettings agar
+     "best region preference" lama dibuang.
    - **App Version**: samakan dengan `HideSeekConstants.GameVersion` (`1.0.0`).
      Player dengan App Version berbeda tidak akan ketemu di matchmaking.
+   - **Protocol**: `WebRPC`/UDP default (UDP = `Native` = paling hemat; WebSocket hanya perlu untuk WebGL).
 4. Alternatif dari kode: isi `HideSeekConstants.PhotonAppId` (lihat komentar di file itu).
 5. Untuk pengujian tanpa server: centang **Offline Mode** di `NetworkManager`
    (Multiplayer Editor window: *Edit → Play* 2x).
@@ -236,6 +241,9 @@ jumlah `spawnPoints`. Semua ada di `HideSeekConstants.cs` + Inspector.
 | Tombol skill tidak muncul / hilang | `UIManager.skills` isinya **2 elemen** (bukan 4): slot 0 = Kamuflase/Radar, slot 1 = Prop Swap/Sonic Blast. Tiap elemen punya `hiderLabel` & `seekerLabel` sendiri, label otomatis berganti sesuai role. `cooldownFill` harus `Image` dengan **Image Type = Filled, Fill Method = Radial**. |
 | Player diam saat dijalankan dari prefab manual | `PhotonView.observed` belum terisi (isi `PlayerController` + `PlayerCombat`), atau `Rigidbody2D` dibuat di child, bukan di root yang sama dengan `PlayerController`. Body Type Kinematic tetap didukung (`MovePosition`). |
 | Nama pemain tidak berubah | `RoomListUI.playerNameInput` belum di-assign. Nama disimpan di `PlayerPrefs["HideSeek.PlayerNick"]` dan dikirim lewat `NetworkManager.SetPlayerName()`. |
+
+| Room tidak muncul di daftar (padahal sudah create) | Keduanya connect ke **region berbeda** (Best Region bisa beda per perangkat) atau `App Version` beda → isi *Fixed Region* = `asia` dan samakan `HideSeekConstants.GameVersion`. |
+| Tidak bisa Start saat sendiri | Centang `allowSoloStart` (GameManager) atau `offlineMode` (NetworkManager) |
 
 **Solo test (tanpa teman, tanpa App ID):** `Window → Photon → ... →` biarkan App ID apa adanya,
 centang `offlineMode` di `NetworkManager` scene Lobby → Play → tekan `Space`. `PhotonNetwork.Instantiate`
