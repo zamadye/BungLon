@@ -1,0 +1,31 @@
+# Unity generated
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Uu]serSettings/
+[Mm]emoryCaptures/
+[Rr]ecordings/
+sysinfo.txt
+*.booproj
+*.pidb
+*.sln
+*.user
+*.unityproj
+
+# Asset store / plugin imports (Photon PUN 2 is imported via the Unity Asset Store)
+Assets/Photon/
+Assets/Photon.meta
+Assets/Editor Default Resources/Photon/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.csproj
+*.vsconfig
