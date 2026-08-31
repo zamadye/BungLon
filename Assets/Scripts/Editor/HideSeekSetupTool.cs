@@ -8,7 +8,8 @@
 //    HideSeek > Setup > 2. Set Layer 6 = Ground
 //    HideSeek > Setup > 3. Build Demo Scene (in current scene)
 //  Semua langkah idempotent (aman dijalankan 2x). Aset ditulis ke
-//  Assets/Resources/HideSeek/ agar PhotonNetwork.Instantiate(name) bekerja
+//  Prefab PEMAIN disimpan di ROOT Assets/Resources/ (syarat PhotonNetwork.Instantiate),
+//  aset lain (sprite, ring, peta, prop, database) di Assets/Resources/HideSeek/
 //  tanpa harus mengisi field Inspector.
 // ============================================================================
 #if UNITY_EDITOR
@@ -32,8 +33,20 @@ namespace HideSeek.EditorTools
 {
     public static class HideSeekSetupTool
     {
+        /// <summary>Folder isi: sprite, PropDatabase, ring, peta placeholder, prop.</summary>
         private const string Root = "Assets/Resources/HideSeek";
         private const string Sprites = Root + "/Sprites";
+
+        /// <summary>
+        /// ROOT Resources - HANYA di sini PUN2 (DefaultPool) bisa menemukan prefab yang di-
+        /// Instantiate lewat nama: PhotonNetwork.Instantiate("PlayerNetworked"). Sub-folder
+        /// tidak dibaca oleh Resources.Load(name), jadi prefab pemain WAJIB di sini.
+        /// </summary>
+        private const string NetResources = "Assets/Resources";
+        private const string PlayerPrefabPath = NetResources + "/" + HideSeekPrefabs.Player + ".prefab";
+
+        /// <summary>Salinan prefab untuk konvensi folder proyek (di-assign ke NetworkManager.playerPrefab).</summary>
+        private const string PrefabFolder = "Assets/Prefabs";
         private const float PPU = 32f;
 
         // ============================ MENU 1 ===================================
@@ -54,19 +67,29 @@ namespace HideSeek.EditorTools
             GameObject ring = BuildSonicRing(circle);
             BuildPlaceholderMap(white);
 
-            PrefabUtility.SaveAsPrefabAsset(player, Root + "/" + HideSeekPrefabs.Player + ".prefab");
+            EnsureFolder(NetResources);
+            EnsureFolder(PrefabFolder);
+
+            // Prefab pemain: WAJIB di root Resources + salinan di Assets/Prefabs (untuk field Inspector).
+            PrefabUtility.SaveAsPrefabAsset(player, PlayerPrefabPath);
+            RegisterInPunPrefabList(PlayerPrefabPath);
+            CopyPrefab(PlayerPrefabPath, PrefabFolder + "/" + HideSeekPrefabs.Player + ".prefab");
+
             PrefabUtility.SaveAsPrefabAsset(ring, Root + "/" + HideSeekPrefabs.SonicRing + ".prefab");
             PrefabUtility.SaveAsPrefabAsset(mapRoot, Root + "/" + HideSeekPrefabs.PlaceholderMap + ".prefab");
             Object.DestroyImmediate(player);
             Object.DestroyImmediate(ring);
             Object.DestroyImmediate(mapRoot);
             EditorUtility.DisplayDialog("HideSeek",
-                "Placeholder selesai dibuat di:\n" + Root + "\n" +
+                "Placeholder selesai dibuat.\n" +
+                "- Prefab pemain  : " + PlayerPrefabPath + "   (harus di root Resources)\n" +
+                "- Aset lain      : " + Root + "\n" +
+                "- Salinan prefab : " + PrefabFolder + "\n" +
                 "Lalu jalankan: HideSeek > Setup > 3. Build Demo Scene", "OK");
 
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
-            Debug.Log("[HideSeek] Placeholder assets selesai di " + Root +
+            Debug.Log("[HideSeek] Placeholder assets selesai. Player: " + PlayerPrefabPath + " | lain: " + Root +
                       "\n -> lanjutkan: HideSeek > Setup > 3. Build Demo Scene");
         }
 
@@ -88,6 +111,99 @@ namespace HideSeek.EditorTools
         }
 
         /// <summary>Layer 6 bernama 'Ground'? Bila belum, set otomatis (dipanggil BuildDemoScene).</summary>
+        /// <summary>Salin prefab ke folder lain (yang lama dihapus supaya tidak dobel).</summary>
+        private static void CopyPrefab(string fromPath, string toPath)
+        {
+            if (AssetDatabase.LoadAssetAtPath<Object>(toPath) != null) AssetDatabase.DeleteAsset(toPath);
+            if (!AssetDatabase.CopyAsset(fromPath, toPath))
+                Debug.LogWarning("[HideSeek] Gagal menyalin prefab ke " + toPath + " (tidak fatal).");
+        }
+
+        /// <summary>
+        /// Opsional: daftarkan path prefab ke PhotonServerSettings -> "Pun Prefabs". Berguna bila
+        /// prefab nanti dipindah keluar Resources. Dibungkus try/catch agar tool tetap jalan
+        /// walau versi PUN2 tidak punya field tersebut.
+        /// </summary>
+        private static void RegisterInPunPrefabList(string assetPath)
+        {
+            try
+            {
+                var settings = PhotonNetwork.PhotonServerSettings;
+                if (settings == null) return;
+                var so = new SerializedObject(settings);
+                SerializedProperty list = so.FindProperty("PunPrefabs");
+                if (list == null) return;
+                for (int i = 0; i < list.arraySize; i++)
+                    if (list.GetArrayElementAtIndex(i).stringValue == assetPath) return;
+                list.InsertArrayElementAtIndex(list.arraySize);
+                list.GetArrayElementAtIndex(list.arraySize - 1).stringValue = assetPath;
+                so.ApplyModifiedPropertiesWithoutUndo();
+                EditorUtility.SetDirty(settings);
+            }
+            catch (System.Exception e)
+            {
+                Debug.Log("[HideSeek] (info) PunPrefabs dilewati: " + e.Message);
+            }
+        }
+
+        // ============================ MENU 4 ===================================
+        /// <summary>
+        /// Membuat 2 file scene siap pakai (Assets/Scenes/Lobby.unity + Game.unity), mengisinya
+        /// dengan NetworkManager/GameManager/Canvas/EventSystem, lalu mendaftarkannya ke Build
+        /// Settings. Setelah ini tidak perlu drag-drop scene manual lagi.
+        /// </summary>
+        [MenuItem("HideSeek/Setup/4. Buat Scene Lobby + Game + Build Settings")]
+        public static void CreateLobbyAndGameScenes()
+        {
+            const string scenesFolder = "Assets/Scenes";
+            EnsureFolder(scenesFolder);
+            EnsureGroundLayer();
+
+            for (int pass = 0; pass < 2; pass++)
+            {
+                bool isLobby = pass == 0;
+                string sceneName = isLobby ? "Lobby" : "Game";
+                string path = scenesFolder + "/" + sceneName + ".unity";
+
+                var scene = EditorSceneManager.NewScene(NewSceneSetup.DefaultGameObjects, NewSceneMode.Single);
+                BuildDemoScene();
+
+                var nm = UnityEngine.Object.FindObjectOfType<NetworkManager>();
+                if (nm != null)
+                {
+                    SetStr(nm, "lobbySceneName", "Lobby");
+                    SetStr(nm, "gameSceneName", "Game");
+                    SetBool(nm, "autoConnectOnAwake", isLobby);   // connect dari Lobby; Game sudah di dalam room
+                }
+
+                var gm = UnityEngine.Object.FindObjectOfType<GameManager>();
+                if (gm != null) SetBool(gm, "loadGameSceneOnStart", isLobby);  // hanya Lobby yang pindah scene
+
+                if (!EditorSceneManager.SaveScene(scene, path))
+                {
+                    Debug.LogError("[HideSeek] Gagal menyimpan " + path);
+                    return;
+                }
+                Debug.Log("[HideSeek] Scene dibuat: " + path);
+            }
+
+            // Build Settings: kedua scene WAJIB ada, kalau tidak LoadScene("Game") gagal saat runtime.
+            var build = new System.Collections.Generic.List<EditorBuildSettingsScene>
+            {
+                new EditorBuildSettingsScene(scenesFolder + "/Lobby.unity", true),
+                new EditorBuildSettingsScene(scenesFolder + "/Game.unity", true)
+            };
+            EditorBuildSettings.scenes = build.ToArray();
+            AssetDatabase.SaveAssets();
+            AssetDatabase.Refresh();
+
+            EditorSceneManager.OpenScene(scenesFolder + "/Lobby.unity");
+            EditorUtility.DisplayDialog("HideSeek",
+                "Scene Lobby + Game sudah dibuat dan masuk Build Settings.\n" +
+                "Langkah tersisa: isi App ID (Window > Photon Unity Networking > Highlights > Server Settings), " +
+                "lalu Play di scene Lobby.", "OK");
+        }
+
         private static void EnsureGroundLayer()
         {
             if (LayerMask.NameToLayer("Ground") == HideSeekConstants.GroundLayerIndex) return;
@@ -102,7 +218,7 @@ namespace HideSeek.EditorTools
         {
             EnsureGroundLayer();
             EnsureFolder(Root);
-            if (AssetDatabase.LoadAssetAtPath<GameObject>(Root + "/" + HideSeekPrefabs.Player + ".prefab") == null)
+            if (AssetDatabase.LoadAssetAtPath<GameObject>(PlayerPrefabPath) == null)
             {
                 Debug.LogWarning("[HideSeek] Placeholder belum dibuat -> menjalankan langkah 1 dulu.");
                 GeneratePlaceholders();
@@ -134,7 +250,8 @@ namespace HideSeek.EditorTools
             // --- NetworkManager + GameManager ---
             var nmGo = new GameObject("NetworkManager");
             var nm = nmGo.AddComponent<NetworkManager>();
-            var playerPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(Root + "/" + HideSeekPrefabs.Player + ".prefab");
+            var playerPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(PrefabFolder + "/" + HideSeekPrefabs.Player + ".prefab");
+            if (playerPrefab == null) playerPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(PlayerPrefabPath);
             SetObj(nm, "playerPrefab", playerPrefab);
             SetObj(nm, "gameSceneName", EditorSceneManager.GetActiveScene().name);
             SetStr(nm, "lobbySceneName", "Lobby");
@@ -197,6 +314,7 @@ namespace HideSeek.EditorTools
 
             InputField nameInput = MakeInputField(lobby.transform, "RoomNameInput", "room name (optional)", new Vector2(0.3f, 0.26f));
             Toggle privToggle = MakeToggle(lobby.transform, "PrivateToggle", "private room", new Vector2(0.72f, 0.26f));
+            InputField nickInput = MakeInputField(lobby.transform, "PlayerNameInput", "your name", new Vector2(0.3f, 0.32f));
 
             // ---------- HUD ----------
             GameObject hud = Panel(canvasGo.transform, "HudPanel", new Color(0, 0, 0, 0));
@@ -330,6 +448,7 @@ namespace HideSeek.EditorTools
             SetObj(rl, "headerText", conn);
             SetObj(rl, "roomNameInput", nameInput);
             SetObj(rl, "privateToggle", privToggle);
+            SetObj(rl, "playerNameInput", nickInput);   // nama pemain -> NetworkManager.SetPlayerName
             SetObj(rl, "createButton", createBtn);
             SetObj(rl, "refreshButton", refreshBtn);
             SetObj(rl, "quickJoinButton", quickBtn);

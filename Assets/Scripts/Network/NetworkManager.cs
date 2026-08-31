@@ -131,7 +131,10 @@ namespace HideSeek.Network
             //       (field "App ID Realtime"). HideSeekConstants.PhotonAppId hanya dokumentasi/build script.
             if (!string.IsNullOrEmpty(HideSeekConstants.PhotonAppId))
                 Log("PhotonAppId di kode = " + HideSeekConstants.PhotonAppId + " (set juga di PhotonServerSettings).");
-            if (string.IsNullOrEmpty(PhotonNetwork.NickName)) PhotonNetwork.NickName = MakeNick();
+            // Nick: pakai nama tersimpan (dari InputField di lobby) bila ada.
+            string saved = PlayerPrefs.GetString(NickPrefKey, "");
+            if (!string.IsNullOrEmpty(saved)) PhotonNetwork.NickName = saved;
+            else if (string.IsNullOrEmpty(PhotonNetwork.NickName)) PhotonNetwork.NickName = MakeNick();
 
             ResolvedPlayerPrefab = PrefabLibrary.Resolve(playerPrefab, HideSeekPrefabs.Player);
 
@@ -149,10 +152,33 @@ namespace HideSeek.Network
             else if (Input.GetKeyDown(KeyCode.L)) LeaveRoom(false);
         }
 
-        /// <summary>Nickname otomatis dari nama perangkat (aman untuk mobile).</summary>
+        /// <summary>Key PlayerPrefs untuk nama pemain (dipakai juga oleh RoomListUI).</summary>
+        public const string NickPrefKey = "HideSeek.PlayerNick";
+
+        /// <summary>
+        /// Ganti nama pemain. Boleh dipanggil sebelum maupun sesudah connect:
+        /// sebelum connect -> PhotonNetwork.NickName (nick saat join),
+        /// sesudah join     -> PhotonNetwork.LocalPlayer.NickName (langsung tersinkron ke room).
+        /// </summary>
+        public void SetPlayerName(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return;
+            name = name.Trim();
+            if (name.Length > 16) name = name.Substring(0, 16);
+            PlayerPrefs.SetString(NickPrefKey, name);
+            PlayerPrefs.Save();
+
+            if (PhotonNetwork.InRoom && PhotonNetwork.LocalPlayer != null) PhotonNetwork.LocalPlayer.NickName = name;
+            else PhotonNetwork.NickName = name;
+            Log("Nama pemain -> " + name);
+        }
+
+        /// <summary>Nama sementara: nick tersimpan, atau potongan nama perangkat + angka acak.</summary>
         private static string MakeNick()
         {
-            string n = SystemInfo.deviceName;
+            string n = PlayerPrefs.GetString(NickPrefKey, "");
+            if (!string.IsNullOrEmpty(n)) return n;
+            n = SystemInfo.deviceName;
             if (string.IsNullOrEmpty(n) || n.Length < 3) n = "Player";
             if (n.Length > 12) n = n.Substring(0, 12);
             return n + "-" + UnityEngine.Random.Range(100, 999);
@@ -429,8 +455,9 @@ namespace HideSeek.Network
         {
             if (ResolvedPlayerPrefab == null)
             {
-                Warn("playerPrefab kosong dan Resources/HideSeek/" + HideSeekPrefabs.Player +
-                     " tidak ditemukan. Jalankan menu: HideSeek > Setup > Generate Placeholder Assets.");
+                Warn("playerPrefab belum di-assign dan '" + HideSeekPrefabs.Player +
+                     ".prefab' tidak ada di ROOT Assets/Resources/ (sub-folder tidak dibaca Photon). " +
+                     "Jalankan menu: HideSeek > Setup > 1. Generate Placeholder Assets.");
                 return;
             }
 

@@ -22,6 +22,9 @@ using UnityEngine;
 namespace HideSeek.Skills
 {
     [RequireComponent(typeof(PlayerController))]
+    [RequireComponent(typeof(PlayerController))]
+    [RequireComponent(typeof(CamouflageHelper))]
+    [RequireComponent(typeof(PlayerVisual))]
     public class HiderSkill : MonoBehaviourPunCallbacks, IOnEventCallback
     {
         // ============================ INSPECTOR ================================

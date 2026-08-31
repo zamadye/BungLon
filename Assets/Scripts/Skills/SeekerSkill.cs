@@ -22,6 +22,7 @@ using UnityEngine;
 namespace HideSeek.Skills
 {
     [RequireComponent(typeof(PlayerController))]
+    [RequireComponent(typeof(PlayerController))]
     public class SeekerSkill : MonoBehaviourPun
     {
         // ============================ INSPECTOR ================================

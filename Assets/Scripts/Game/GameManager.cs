@@ -41,6 +41,9 @@ namespace HideSeek.Game
         [Tooltip("Minimal pemain untuk mulai ronde (1 Seeker + 1 Hider).")]
         [Range(2, HideSeekConstants.RoomHardCap)] public int minPlayersToStart = HideSeekConstants.RoomMinPlayers;
 
+        [Tooltip("Centang agar ronde bisa dimulai walau cuma 1 orang (berguna untuk test sendiri secara online).")]
+        public bool allowSoloStart = false;
+
         [Tooltip(">0: Host otomatis mulai hitung mundur setelah room sepi selama N detik. 0 = manual (tombol Start).")]
         public float autoStartAfterSeconds = 0f;
 
@@ -151,9 +154,12 @@ namespace HideSeek.Game
         {
             if (!IsHost) { Notice("Hanya Host yang bisa memulai permainan."); return; }
             if (State != GameState.Lobby) { Notice("Ronde sedang berjalan."); return; }
-            if (PhotonNetwork.CurrentRoom == null || PhotonNetwork.CurrentRoom.PlayerCount < minPlayersToStart)
+            int players = PhotonNetwork.CurrentRoom != null ? PhotonNetwork.CurrentRoom.PlayerCount : 0;
+            // OfflineMode / allowSoloStart -> boleh mulai 1 orang (test sendirian di editor & device).
+            int need = (allowSoloStart || PhotonNetwork.OfflineMode) ? 1 : minPlayersToStart;
+            if (players < need)
             {
-                Notice("Butuh minimal " + minPlayersToStart + " pemain.");
+                Notice("Butuh minimal " + need + " pemain. (test sendirian: centang offlineMode di NetworkManager)");
                 return;
             }
             StartRound();

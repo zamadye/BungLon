@@ -40,6 +40,10 @@ namespace HideSeek.UI
         [Tooltip("Teks status koneksi (Online / Connecting / Offline).")]
         public Text headerText;
 
+        [Header("Identitas")]
+        [Tooltip("InputField nama pemain (opsional). Kosong = otomatis dari nama perangkat.")]
+        public InputField playerNameInput;
+
         [Header("Input Create Room")]
         [Tooltip("Nama room custom (kosong = otomatis HS-XXXXX).")]
         public InputField roomNameInput;
@@ -191,6 +195,7 @@ namespace HideSeek.UI
             NetworkManager nm = NetworkManager.Instance;
             if (nm == null) { Toast("NetworkManager belum ada di scene."); return; }
 
+            ApplyPlayerName(nm);
             string name = roomNameInput != null ? roomNameInput.text.Trim() : "";
             bool isPrivate = privateToggle != null && privateToggle.isOn;
 
@@ -304,8 +309,21 @@ namespace HideSeek.UI
             if (createButton != null) createButton.onClick.AddListener(CreateRoomFromUI);
             if (refreshButton != null) refreshButton.onClick.AddListener(RefreshNow);
             if (quickJoinButton != null && NetworkManager.Instance != null)
-                quickJoinButton.onClick.AddListener(delegate { if (NetworkManager.Instance != null) NetworkManager.Instance.JoinQuickPlay(); });
+                quickJoinButton.onClick.AddListener(delegate
+                {
+                    NetworkManager nm = NetworkManager.Instance;
+                    if (nm == null) return;
+                    ApplyPlayerName(nm);
+                    nm.JoinQuickPlay();
+                });
             if (joinByCodeButton != null) joinByCodeButton.onClick.AddListener(JoinByCode);
+        }
+
+        /// <summary>Kirim nama di InputField ke NetworkManager (disimpan di PlayerPrefs juga).</summary>
+        private void ApplyPlayerName(NetworkManager nm)
+        {
+            if (playerNameInput != null && !string.IsNullOrEmpty(playerNameInput.text))
+                nm.SetPlayerName(playerNameInput.text);
         }
 
         /// <summary>Isi dropdown kapasitas dengan angka yang diizinkan (2..12 default).</summary>

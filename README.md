@@ -42,15 +42,24 @@ Assets/
    - PUN2 membuat folder `Assets/Photon/...` (sudah di-`.gitignore`).
 3. Copy folder `Assets/Scripts`, `Assets/Prefabs`, `Assets/UI`, `Assets/Resources` ke project.
 4. Menu Unity: **HideSeek → Setup → 1. Generate Placeholder Assets**
-   (membuat sprite, `PlayerNetworked.prefab`, `Prop_0..2.prefab`, `PropDatabase.asset`,
-   `SonicBlastRing.prefab`, `MapPlaceholder.prefab` di `Assets/Resources/HideSeek/`).
+   - sprite, `Prop_0..2.prefab`, `PropDatabase.asset`, `SonicBlastRing.prefab`,
+     `MapPlaceholder.prefab` → `Assets/Resources/HideSeek/`
+   - **`PlayerNetworked.prefab` → `Assets/Resources/` (ROOT!)** + salinan di `Assets/Prefabs/`.
+     `PhotonNetwork.Instantiate("PlayerNetworked")` hanya membaca root folder Resources,
+     sub-folder **tidak** terbaca (`Resources.Load(name)`), jadi file ini tidak boleh ditaruh
+     di `Resources/HideSeek/`.
 5. Menu Unity: **HideSeek → Setup → 2. Set Layer 6 = Ground**.
-6. Buka scene kosong → **HideSeek → Setup → 3. Build Demo Scene (current scene)**.
-   Semua objek + referensi UI otomatis ter-wire.
-7. **File → Build Settings → Add Open Scenes** (wajib, mis. scene `Lobby` = scene aktif ini).
-8. Isi App ID (lihat langkah 1 di bawah), lalu **Play**. Tekan `N` = buat room,
-   `J` = quick play, `Space` = Start (host). Untuk test sendirian, centang
-   **Offline Mode** di `NetworkManager`.
+6. Menu Unity: **HideSeek → Setup → 3. Build Demo Scene (current scene)** → semua objek
+   + referensi UI otomatis ter-wire di scene yang sedang dibuka.
+7. Cara paling cepat (rekomendasi): **HideSeek → Setup → 4. Buat Scene Lobby + Game + Build Settings**.
+   Menu ini membuat `Assets/Scenes/Lobby.unity` + `Assets/Scenes/Game.unity`, mengisi keduanya
+   (NetworkManager/GameManager/Canvas/EventSystem/kamera), menyetel `lobbySceneName="Lobby"`,
+   `gameSceneName="Game"`, `loadGameSceneOnStart` (hanya di Lobby), dan mendaftarkan kedua scene
+   ke **Build Settings** otomatis. Setelah ini tinggal isi App ID → Play.
+8. Isi App ID (lihat langkah 1 di bawah), lalu **Play** di scene **Lobby**. Tekan `N` = buat room,
+   `J` = quick play, `Space` = Start (host). Test sendirian: centang **`offlineMode`** di
+   `NetworkManager` (nama field-nya begitu, bukan `testOfflineMode`) — di mode offline minimal
+   pemain otomatis jadi 1 (lihat `GameManager.allowSoloStart`).
 
 > Tanpa menu setup pun project tetap compile; hanya field Inspector yang kosong.
 
@@ -84,8 +93,15 @@ Assets/
 | `Canvas` | `Canvas`, `CanvasScaler`, `GraphicRaycaster`, `UIManager`, `RoomListUI` | Lihat bagian 4. |
 
 **Physics2D**: `Edit → Project Settings → Physics 2D → Gravity = (0, 0)`.
-`PlayerController` menggerakkan `Rigidbody2D` lewat `body.velocity`, jadi gravityScale/Rigidbody
-harus `Dynamic` dengan **Freeze Rotation Z** dan `Collision Detection = Continuous`.
+`PlayerController` mendukung **dua** mode Rigidbody2D:
+- **Dynamic** (default Setup Tool) → ditulis lewat `body.velocity`, Collision Detection `Continuous`.
+- **Kinematic** → ditulis lewat `body.MovePosition()` (velocity di Kinematic memang diabaikan Unity,
+  jadi kalau checklist kamu memakai Kinematic, gerakan tetap sinkron — tidak perlu diganti).
+`Awake()` `PlayerController` juga memaksa `gravityScale = 0` + `freezeRotation = true`, jadi
+karakter tidak akan jatuh/berputar walau lupa disetel di prefab.
+`[RequireComponent]` di `PlayerController/PlayerCombat/HiderSkill/SeekerSkill` membuat
+`PhotonView`, `Rigidbody2D`, `PlayerVisual`, `CamouflageHelper` otomatis ikut ditambahkan saat
+script di-drag ke GameObject.
 
 **Layers**: `Ground` = layer 6 (dipakai raycast camo & pushback), pemain di layer `Default`
 (`PlayerController.hiderLayerMask` untuk tap-to-catch).
@@ -111,9 +127,11 @@ harus `Dynamic` dengan **Freeze Rotation Z** dan `Collision Detection = Continuo
 4. **PENTING** — `PhotonView` → *Observed Components*: `Element 0 = PlayerController`,
    `Element 1 = PlayerCombat`. Tanpa ini `OnPhotonSerializeView()` tidak pernah dipanggil
    (posisi tidak sinkron).
-5. Simpan ke `Assets/Prefabs/PlayerNetworked.prefab` **dan** simpan salinan di
-   `Assets/Resources/HideSeek/PlayerNetworked.prefab` bila ingin prefab otomatis dipakai
-   tanpa assign Inspector.
+5. Simpan prefab ke **`Assets/Resources/PlayerNetworked.prefab` (root Resources — wajib untuk
+   Photon)** dan, bila suka rapi, salinan di `Assets/Prefabs/PlayerNetworked.prefab` untuk di-assign
+   ke `NetworkManager.playerPrefab`. Nama file = nama yang dipakai `PhotonNetwork.Instantiate()`,
+   jadi harus sama persis di semua klien/build. Nama `Player.prefab` juga diterima (alias), asal
+   tetap berada di root `Assets/Resources/`.
 
 Prop (Meja/Kursi/Pot) di `Assets/Prefabs/Props/`: `SpriteRenderer` + `BoxCollider2D` di layer
 `Ground`, nama `Prop_0`, `Prop_1`, `Prop_2`, lalu assign ke **PropDatabase** (`id` 0/1/2 = ID yang
@@ -213,3 +231,12 @@ jumlah `spawnPoints`. Semua ada di `HideSeekConstants.cs` + Inspector.
 | Tidak ada daftar room | Centang `joinLobbyAfterConnect` di `NetworkManager` (mengirim `PhotonNetwork.JoinLobby` setelah connect); atau tekan tombol REFRESH (re-join typed lobby `hideseek`). Pastikan **App ID benar** dan room dibuat di typed lobby yang sama. |
 | UI tidak merespons sentuhan | `EventSystem` tidak ada di scene, atau `GraphicRaycaster` hilang dari Canvas. |
 | Tap untuk menangkap tidak jalan | `hiderLayerMask` tidak mencakup layer pemain, atau `EventSystem.IsPointerOverGameObject` menahan input (tombol terlalu besar). |
+| `DefaultPool failed to load "PlayerNetworked". Make sure it's in a "Resources" folder` | Prefab pemain ada di **sub-folder** Resources (`Resources/HideSeek/`). Pindahkan ke **`Assets/Resources/PlayerNetworked.prefab`** (root) — `PhotonNetwork.Instantiate()` memakai `Resources.Load(namaFile)`. |
+| Klik Start muncul "Butuh minimal 2 pemain" | Wajar saat online. Untuk test sendirian: centang `offlineMode` di `NetworkManager`, atau centang `allowSoloStart` di `GameManager`. |
+| Tombol skill tidak muncul / hilang | `UIManager.skills` isinya **2 elemen** (bukan 4): slot 0 = Kamuflase/Radar, slot 1 = Prop Swap/Sonic Blast. Tiap elemen punya `hiderLabel` & `seekerLabel` sendiri, label otomatis berganti sesuai role. `cooldownFill` harus `Image` dengan **Image Type = Filled, Fill Method = Radial**. |
+| Player diam saat dijalankan dari prefab manual | `PhotonView.observed` belum terisi (isi `PlayerController` + `PlayerCombat`), atau `Rigidbody2D` dibuat di child, bukan di root yang sama dengan `PlayerController`. Body Type Kinematic tetap didukung (`MovePosition`). |
+| Nama pemain tidak berubah | `RoomListUI.playerNameInput` belum di-assign. Nama disimpan di `PlayerPrefs["HideSeek.PlayerNick"]` dan dikirim lewat `NetworkManager.SetPlayerName()`. |
+
+**Solo test (tanpa teman, tanpa App ID):** `Window → Photon → ... →` biarkan App ID apa adanya,
+centang `offlineMode` di `NetworkManager` scene Lobby → Play → tekan `Space`. `PhotonNetwork.Instantiate`
+berjalan lokal, semua state machine + skill + UI teruji; hanya sinkronisasi antar-device yang tidak teruji.

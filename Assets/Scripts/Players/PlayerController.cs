@@ -24,6 +24,11 @@ using HideSeek.UI;
 namespace HideSeek.Players
 {
     [RequireComponent(typeof(PhotonView))]
+    // Komponen wajib ikut ditambahkan otomatis saat script ini di-drag ke GameObject
+    // (menghindari error paling umum: PhotonView / Rigidbody2D / PlayerVisual ketinggalan).
+    [RequireComponent(typeof(PhotonView))]
+    [RequireComponent(typeof(Rigidbody2D))]
+    [RequireComponent(typeof(PlayerVisual))]
     public class PlayerController : MonoBehaviourPunCallbacks, IPunObservable, IOnEventCallback, IPunInstantiateMagicCallback
     {
         // =========================== REQUIRED PARTS =============================
@@ -115,6 +120,14 @@ namespace HideSeek.Players
             if (pv == null)
                 Debug.LogError("[HideSeek] PlayerController butuh PhotonView pada prefab pemain!", this);
 
+            // Jaring pengaman: banyak yang lupa menyetel Rigidbody2D -> dipaksa gravity 0 + freeze Z.
+            if (body != null)
+            {
+                body.gravityScale = 0f;
+                body.freezeRotation = true;
+                if (body.bodyType == RigidbodyType2D.Dynamic) body.collisionDetectionMode = CollisionDetectionMode2D.Continuous;
+            }
+
             if (visual != null) visual.Capture();
             NetPosition = targetPos = transform.position;
 
@@ -197,12 +210,20 @@ namespace HideSeek.Players
 
             if (body != null)
             {
-                Vector2 vel = MoveInput * CurrentMoveSpeed;
-                body.velocity = vel;
+                Vector2 vel = MoveInput * CurrentMoveSpeed;      // unit/detik (dikirim ke jaringan)
                 netSendVelocity = vel;
+
+                // BodyType Kinematic TIDAK membaca velocity -> wajib MovePosition (ceklist manual
+                // memakai Kinematic; prefab hasil Setup Tool memakai Dynamic). Dua-duanya didukung.
+                bool kinematic = body.bodyType != RigidbodyType2D.Dynamic;
+                if (kinematic)
+                    body.MovePosition(body.position + vel * Time.deltaTime);
+                else
+                    body.velocity = vel;
             }
             else
             {
+                // Tidak ada Rigidbody2D (mis. debug) -> gerakkan transform langsung.
                 Vector2 vel = MoveInput * CurrentMoveSpeed * Time.deltaTime;
                 transform.position += (Vector3)vel;
                 netSendVelocity = MoveInput * CurrentMoveSpeed;

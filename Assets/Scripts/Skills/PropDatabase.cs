@@ -40,7 +40,7 @@ namespace HideSeek.Skills
             public GameObject ResolvePrefab()
             {
                 if (prefab != null) return prefab;
-                var go = Resources.Load<GameObject>(PrefabLibrary.ResourcesFolder + "Prop_" + id);
+                var go = PrefabLibrary.Load<GameObject>("Prop_" + id);
                 return go;
             }
         }
@@ -134,7 +134,7 @@ namespace HideSeek.Skills
         /// <summary>Ambil database default (dipanggil HiderSkill saat field belum di-assign).</summary>
         public static PropDatabase LoadDefault()
         {
-            var db = Resources.Load<PropDatabase>(PrefabLibrary.ResourcesFolder + "PropDatabase");
+            var db = PrefabLibrary.Load<PropDatabase>("PropDatabase");
             return db;
         }
     }
