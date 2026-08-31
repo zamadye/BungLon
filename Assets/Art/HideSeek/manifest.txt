@@ -1,0 +1,24 @@
+# HideSeek - daftar aset hasil post-process (dibuat otomatis oleh Tools/hideseek_art_postprocess.py)
+# avg RGB berguna saat menyetel skill Kamuflase: makin beda warna antar tile, makin jelas bedanya.
+
+Chameleon_Hider         192x192  avg RGB = ( 49,131, 55)  #318337
+Chameleon_Seeker        192x192  avg RGB = ( 39,109,140)  #276D8C
+Prop_Table              128x128  avg RGB = ( 89, 52, 31)  #59341F
+Prop_Chair              128x128  avg RGB = (111, 64, 41)  #6F4029
+Prop_FlowerPot          128x128  avg RGB = (101, 73, 37)  #654925
+Prop_Crate              128x128  avg RGB = (106, 62, 33)  #6A3E21
+Hedge_Wall              128x128  avg RGB = ( 71,132, 52)  #478434
+Bush                    128x128  avg RGB = ( 44, 93, 46)  #2C5D2E
+Rocks                   128x128  avg RGB = (113,117,127)  #71757F
+Mushrooms               128x128  avg RGB = (159, 64, 65)  #9F4041
+Icon_Camouflage         112x112  avg RGB = (117,128, 71)  #758047
+Icon_PropSwap           112x112  avg RGB = (153,103, 70)  #996746
+Icon_Radar              112x112  avg RGB = ( 84,121,152)  #547998
+Icon_SonicBlast         112x112  avg RGB = (177, 95, 81)  #B15F51
+Icon_Revive             112x112  avg RGB = (188, 58, 51)  #BC3A33
+Tile_Grass              128x128  avg RGB = ( 73,135, 25)  #498719
+Tile_Sand               128x128  avg RGB = (217,166, 95)  #D9A65F
+Tile_Stone              128x128  avg RGB = (124,128,127)  #7C807F
+Tile_Wood               128x128  avg RGB = (140, 85, 42)  #8C552A
+Bg_Lobby               1080x1920 avg RGB = ( 35, 50, 45)  #23322D
+AppIcon                 512x512  avg RGB = (210,199,152)  #D2C798
