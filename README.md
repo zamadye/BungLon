@@ -243,7 +243,6 @@ jumlah `spawnPoints`. Semua ada di `HideSeekConstants.cs` + Inspector.
 | Nama pemain tidak berubah | `RoomListUI.playerNameInput` belum di-assign. Nama disimpan di `PlayerPrefs["HideSeek.PlayerNick"]` dan dikirim lewat `NetworkManager.SetPlayerName()`. |
 
 | Room tidak muncul di daftar (padahal sudah create) | Keduanya connect ke **region berbeda** (Best Region bisa beda per perangkat) atau `App Version` beda → isi *Fixed Region* = `asia` dan samakan `HideSeekConstants.GameVersion`. |
-| Tidak bisa Start saat sendiri | Centang `allowSoloStart` (GameManager) atau `offlineMode` (NetworkManager) |
 
 **Solo test (tanpa teman, tanpa App ID):** `Window → Photon → ... →` biarkan App ID apa adanya,
 centang `offlineMode` di `NetworkManager` scene Lobby → Play → tekan `Space`. `PhotonNetwork.Instantiate`
