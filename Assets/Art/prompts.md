@@ -37,6 +37,11 @@ Tools/…postprocess.py      keying magenta -> alpha, pisahkan objek, auto-crop,
 | `bg_lobby.png` | 9:16 vertical dusk jungle canopy clearing, dark muted center so UI text stays readable |
 | `app_icon.png` | rounded-square yellow→orange gradient badge, green chameleon head, glossy cartoon game icon |
 
+> Gambar pemeriksaan cepat: `ArtRaw/_preview_sprites.png` (semua sprite di atas latar abu-abu
+> dan magenta - untuk mengecek keying tidak menyisakan fringe) dan
+> `ArtRaw/_preview_map_zones.png` (perkiraan susunan zona tile setelah Setup > 5).
+> `ArtRaw/` di-`.gitignore` (hanya bahan mentah), jadi preview ini tidak ikut ke repository.
+
 ## 3. Menjalankan
 
 ```bash
