@@ -585,8 +585,9 @@ if (typeof document !== 'undefined') (function boot() {
     'Prop_Table', 'Prop_Chair', 'Prop_FlowerPot', 'Prop_Crate', 'Tile_Grass', 'Tile_Sand', 'Tile_Stone',
     'Tile_Wood', 'Icon_Camouflage', 'Icon_PropSwap', 'Icon_Radar', 'Icon_SonicBlast', 'Icon_Revive', 'Bg_Lobby'];
   const SPR = {}, tintCache = new Map();
-  let pending = names.length;
-  const onAll = () => { if (--pending === 0) startGame(); else if (pending < 0) startGame(); };
+  let pending = names.length, assetsReady = false, tileRgbDone = false;
+  // Semua sprite (atau error) sudah datang -> warna tile boleh dihitung.
+  const onAll = () => { if (--pending <= 0) { assetsReady = true; startGame(); } };
   for (const n of names) {
     const img = new Image();
     img.onload = img.onerror = onAll;
@@ -625,7 +626,6 @@ if (typeof document !== 'undefined') (function boot() {
       for (let i = 0; i < d.length; i += 4) { if (d[i + 3] < 8) continue; r += d[i]; gg += d[i + 1]; b += d[i + 2]; n++; }
       return n ? [Math.round(r / n), Math.round(gg / n), Math.round(b / n)] : [255, 255, 255];
     });
-    if (ROUND) ROUND.tileRgb = tileRgb;
   }
 
   const $ = id => document.getElementById(id);
@@ -914,8 +914,12 @@ if (typeof document !== 'undefined') (function boot() {
 
   /* ---------- lobby / net ---------- */
   function startGame() {
-    if (started) return; started = true;
-    map = buildMap(); computeTileColors();
+    // Panggilan kedua biasanya dari loader sprite: hitung warna tile sekali saja,
+    // karena ?solo=1 / klik cepat bisa datang sebelum PNG selesai dimuat.
+    if (started) { if (assetsReady && !tileRgbDone) { computeTileColors(); tileRgbDone = true; if (ROUND) ROUND.tileRgb = tileRgb; } return; }
+    started = true;
+    map = buildMap();
+    if (assetsReady) { computeTileColors(); tileRgbDone = true; }
     resize();
     $('sizeSel').innerHTML = '';
     for (let n = CFG.roomMin; n <= 12; n++) {
@@ -926,7 +930,7 @@ if (typeof document !== 'undefined') (function boot() {
     }
     $('nameInput').value = localStorage.getItem('hs_name') || ('pemain' + (100 + rnd(899)));
     ROUND = new Round({ map, onAds: showRewardAd });
-    ROUND.tileRgb = tileRgb;
+    ROUND.tileRgb = tileRgb;      // null selama sprite belum siap -> fallback warna tiles
     window.HideSeekRound = ROUND;      // pegangan debug (console) + smoke test node
     let lastPhase = '';
     ROUND.on(e => {
