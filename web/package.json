@@ -5,7 +5,7 @@
   "description": "Build web (HTML5 canvas) HideSeek Online — aturan 1:1 dengan Assets/Scripts, tanpa Unity engine.",
   "scripts": {
     "start": "node net-server.js",
-    "test": "node ../tools/web_selftest.js && node ../tools/web_dom_smoke.js",
+    "test": "node ../tools/web_selftest.js && node ../tools/web_dom_smoke.js && node ../tools/web_ads_referral_test.js",
     "preview": "python3 ../tools/web_map_preview.py"
   }
 }

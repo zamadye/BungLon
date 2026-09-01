@@ -86,6 +86,19 @@ tr.me td{background:#2fa35b22;font-weight:800}
 #adOverlay.on{display:flex}
 #adOverlay .bar{width:min(420px,80vw);height:8px;background:#ffffff2a;border-radius:8px;overflow:hidden}
 #adOverlay .bar i{display:block;height:100%;width:0;background:#d98d16}
+#metaBar{position:absolute;left:12px;top:84px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;pointer-events:auto;max-width:74vw}
+.pill{background:#04100ccc;border:1px solid #ffffff22;border-radius:999px;padding:5px 10px;font-size:12px;font-weight:700;white-space:nowrap}
+.pill.dim{color:#9fb3a6;font-weight:600}
+.pillBtn{font:inherit;font-size:12px;font-weight:800;border:1px solid #ffffff26;border-radius:999px;padding:6px 11px;
+  background:#d98d16;color:#fff;cursor:pointer;box-shadow:0 3px 0 #9a6207}
+.pillBtn.alt{background:#2b6ba8;box-shadow:0 3px 0 #1b4a75}
+.pillBtn:active{transform:translateY(2px);box-shadow:none}
+.pillBtn:disabled,.gold:disabled,.ghostbtn:disabled{opacity:.45;box-shadow:none;cursor:default}
+#pauseTag{position:absolute;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;gap:6px;
+  background:#000a;letter-spacing:3px;font-weight:900;font-size:26px}
+#pauseTag.on{display:flex}
+#pauseTag small{font-size:12px;letter-spacing:1px;color:#9fb3a6;font-weight:600}
+#shopRow{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;align-items:center;font-size:13px}
 #netBadge{position:absolute;left:14px;bottom:14px;font-size:11px;color:#9fb3a6;pointer-events:auto}
 #netBadge b{color:#eaf3ec}
 </style>
@@ -103,6 +116,14 @@ tr.me td{background:#2fa35b22;font-weight:800}
       <div id="hint"></div>
     </div>
     <div id="hpWrap"><div id="hearts"></div><div id="hpBar"><div id="hpFill"></div></div></div>
+    <div id="metaBar">
+      <span class="pill" id="coins">🪙 0</span>
+      <span class="pill" id="lives">💚 ×0</span>
+      <span class="pill dim" id="maxhpTag">MAX HP 3</span>
+      <button class="pillBtn" id="adLifeBtn">📺 Tonton Iklan +1 Nyawa</button>
+      <button class="pillBtn" id="adCoinsBtn">📺 Dapatkan Koin</button>
+      <button class="pillBtn alt" id="inviteBtn">🎁 Undang Teman</button>
+    </div>
     <div id="minimapWrap"><canvas id="minimap"></canvas></div>
     <div id="skills"></div>
     <div id="toasts"></div>
@@ -113,6 +134,7 @@ tr.me td{background:#2fa35b22;font-weight:800}
     <div id="joy"><div id="joyKnob"></div></div>
     <div id="netBadge">mode: <b id="netMode">SOLO (bots)</b></div>
     <div id="count"><span id="countNum">5</span></div>
+    <div id="pauseTag"><span>IKLAN</span><small>permainan dijeda — jangan tutup tab</small></div>
   </div>
 
   <!-- ============ LOBBY ============ -->
@@ -130,6 +152,12 @@ tr.me td{background:#2fa35b22;font-weight:800}
       <button id="hostBtn" class="alt">BUAT ROOM</button>
       <input id="codeInput" placeholder="kode room" style="width:130px">
       <button id="joinBtn" class="alt">GABUNG</button>
+    </div>
+    <div id="shopRow">
+      <span class="note">Koin: <b id="coinsLobby">0</b> · Nyawa cadangan: <b id="livesLobby">0</b></span>
+      <button id="buyHpBtn" class="ghostbtn">+1 Max HP — 50 🪙</button>
+      <button id="buyLifeBtn" class="ghostbtn">+1 Nyawa — 25 🪙</button>
+      <button id="inviteLobbyBtn" class="gold">🎁 Undang Teman</button>
     </div>
     <div class="row" id="roomRow" style="display:none">
       <span class="note">Room code: <b id="roomCode">—</b> · kirim kode ini ke teman.
@@ -169,6 +197,12 @@ tr.me td{background:#2fa35b22;font-weight:800}
   </div>
 </div>
 
+<!-- konfigurasi (ID iklan TIDAK di repo: web/config.js dihasilkan dari .env) -->
+<script src="config.example.js"></script>
+<script src="config.js" onerror="/* opsional: node tools/gen_web_config.js */"></script>
+<!-- sistem ads + referral (vanilla, dimuat sebelum game.js) -->
+<script src="adsManager.js"></script>
+<script src="referralSystem.js"></script>
 <script src="game.js"></script>
 </body>
 </html>

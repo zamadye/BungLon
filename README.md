@@ -252,7 +252,7 @@ Sudah ada di kode, **tanpa package pun project tetap compile** dan alurnya bisa 
 ### Yang dibuat
 | File | Isi |
 |---|---|
-| `Assets/Scripts/Monetization/AdsManager.cs` | wrapper SDK: init, `IsReady`, `ShowRewarded(callback)`, jeda antar iklan, `AudioListener.pause`, mode **simulasi** saat SDK belum ada |
+| `Assets/Scripts/Monetization/AdsManager.cs` | wrapper SDK (build web punya padanannya sendiri: `web/adsManager.js`, lihat §10 & `integration-guide.md`): init, `IsReady`, `ShowRewarded(callback)`, jeda antar iklan, `AudioListener.pause`, mode **simulasi** saat SDK belum ada |
 | `Assets/Scripts/Monetization/RewardOffers.cs` | menentukan penawaran reward, kuota per ronde, dan mengeksekusi hadiahnya |
 | `UIManager.rewardButton/rewardLabel/rewardQuotaText` | tombol HUD (dibuat otomatis oleh Setup ▸ 3), label & kuota disinkron ~5x/detik |
 | `PlayerController.ApplySpeedBoost`, `HiderSkill.SkipCooldown`, `PlayerCombat.RpcRevived` | sisi gameplay dari tiap hadiah |
@@ -392,6 +392,28 @@ Yang sengaja **tidak** ada di build web: Photon room browser/lobby typed, anti-c
 (camo sampling web membaca piksel, bukan collider), joystick `MobileJoystick` versi Unity,
 dan SDK iklan asli (Unity Ads). Build web dipakai untuk: validasi aturan, tuning angka,
 preview art, dan test multiplayer 2 device di browser.
+
+### Iklan rewarded (AppLixir/AdinPlay) + referral di build web
+
+Dua modul vanilla JS, tanpa dependency — detail lengkap ada di **[`integration-guide.md`](integration-guide.md)**.
+
+| File | Isi |
+|---|---|
+| `web/adsManager.js` | kelas `AdsManager`: `showRewarded(name, onRewarded, onError)` → AppLixir (Google **Ad Placement API**, `adBreak({type:'reward', …})`) → AdinPlay (`window.AdinPlay.rewarded.show`) → **simulasi 1,5 detik** (`📺 [SIMULASI] Iklan reward ditonton!`). Cooldown global 30 detik di `localStorage['lastAdTime']` dengan pesan `Tunggu X detik lagi` |
+| `web/referralSystem.js` | kode unik 7 karakter di `localStorage['myReferralCode']`, link `?ref=`, popup “Selamat datang! … +50 Koin & +1 Nyawa!”, modal **🎁 Undang Teman** (Salin/Bagikan), counter pengundang (`referralBonus`) |
+| `web/config.example.js` + `tools/gen_web_config.js` | **ID iklan tidak pernah ditulis di kode**: isi `.env` (contoh: `.env.example`) → `node tools/gen_web_config.js` → `web/config.js` (di-gitignore). Kosong = mode simulasi |
+| `web/game.js` (`Profile`) | state yang sebelumnya tidak ada di build web: koin, bonus Max HP, nyawa cadangan; disimpan di `localStorage['hideseek_profile']`. Tombol HUD **📺 Tonton Iklan +1 Nyawa**, **📺 Dapatkan Koin**, **🎁 Undang Teman**, plus toko kecil di lobby (`+1 Max HP`, `+1 Nyawa`) |
+
+```bash
+node tools/web_ads_referral_test.js   # 130 assertion: cooldown, fallback, ?ref=, hadiah
+node tools/web_dom_smoke.js           # blok [4]: klik tombol iklan/referral di DOM tiruan
+```
+
+Saat iklan tayang, `game.pause()` dipanggil (loop `step()` dibekukan, ada label **IKLAN**), lalu
+`game.resume()` setelah selesai — sama seperti `AudioListener.pause` di Unity. Hadiah pengundang
+sengaja **belum** menambah koin (butuh backend untuk tahu siapa mengundang siapa); yang dicatat
+baru counter lokal + notifikasi. Versi Unity (`Assets/Scripts/Monetization/`) tidak diubah:
+cooldown Unity 12 detik (`AdMinGapSeconds`), web 30 detik (`ADS_COOLDOWN_SECONDS`).
 
 ### Mau jadi APK dari build web? (opsional, bukan jalur rilis utama)
 

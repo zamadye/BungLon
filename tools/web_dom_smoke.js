@@ -55,6 +55,7 @@ function makeCtx(canvas) {
 }
 class El {
   constructor(tag) {
+    this._id = '';
     this.tagName = (tag || 'div').toUpperCase();
     this.children = []; this.style = {}; this.dataset = {}; this._cls = '';
     this.textContent = ''; this.value = ''; this.disabled = false;
@@ -62,6 +63,8 @@ class El {
     this.width = 1200; this.height = 700;
     this._handlers = {};
   }
+  get id() { return this._id; }
+  set id(v) { this._id = v; byId.set(v, this); }
   get className() { return this._cls; }
   set className(v) { this._cls = v; }
   get innerHTML() { return this._html || ''; }
@@ -76,6 +79,9 @@ class El {
     if (typeof this['on' + t] === 'function') this['on' + t](e);   // tombol dipasang lewat .onclick
   }
   setPointerCapture() { }
+  setAttribute(k, v) { this[k] = v; }
+  getAttribute(k) { return this[k]; }
+  select() { this._selected = true; }
   click() { this.dispatch('click', {}); }
   focus() { } blur() { }
   getBoundingClientRect() { return { left: 0, top: 0, width: this.clientWidth, height: this.clientHeight }; }
@@ -88,19 +94,30 @@ class El {
   get naturalHeight() { return this.__h || 128; }
 }
 const byId = new Map();
-function getEl(id) { if (!byId.has(id)) byId.set(id, new El(id === 'game' || id === 'minimap' ? 'canvas' : 'div')); return byId.get(id); }
+{   // pra-registrasi elemen yang memang ada di index.html (sama dgn browser)
+  const html = fs.readFileSync(path.join(ROOT, 'web/index.html'), 'utf8');
+  for (const m of html.matchAll(/<([a-z0-9]+)[^>]*\bid="([\w-]+)"/gi)) byId.set(m[2], new El(m[1]));
+}
+const getEl = id => byId.get(id) || null;
 let tileColorIdx = 0;
 const doc = {
   getElementById: getEl,
   createElement(tag) { const e = new El(tag); if (tag === 'canvas') { e.__tile = [[74, 135, 25], [217, 166, 95], [124, 128, 127], [139, 85, 42]][tileColorIdx++ % 4]; e.width = e.height = 16; } return e; },
   title: '',
+  head: new El('head'), body: new El('body'), documentElement: new El('html'),
 };
 const winHandlers = {};
 global.document = doc;
 global.window = global;
-global.location = { search: '?solo=1', hostname: 'localhost', href: 'http://localhost/' };
+global.location = { search: '?solo=1&adsSim=0.05', hostname: 'localhost', href: 'http://localhost/', origin: 'http://localhost', pathname: '/index.html' };
 global.addEventListener = (t, fn) => { (winHandlers[t] = winHandlers[t] || []).push(fn); };
-global.localStorage = { _d: {}, getItem(k) { return this._d[k] === undefined ? null : this._d[k]; }, setItem(k, v) { this._d[k] = String(v); } };
+global.localStorage = {
+  _d: {},
+  getItem(k) { return this._d[k] === undefined ? null : this._d[k]; },
+  setItem(k, v) { this._d[k] = String(v); },
+  removeItem(k) { delete this._d[k]; },
+  clear() { this._d = {}; },
+};
 global.fetch = () => Promise.reject(new Error('no network in smoke test'));
 global.Image = class {
   constructor() { this._src = ''; }
@@ -120,7 +137,25 @@ function pump(frames, dtms = 16) {
 }
 global.dispatchEventKey = (type, key) => { for (const fn of (winHandlers[type] || [])) fn({ key, code: key, target: { tagName: 'BODY' }, preventDefault() { } }); };
 
+/* ---------- [2b] modul iklan & referral dimuat lebih dulu (persis seperti <script> di index.html) ---------- */
+{
+  const A = require(path.join(ROOT, 'web/adsManager.js'));
+  const R = require(path.join(ROOT, 'web/referralSystem.js'));
+  global.AdsManager = A.AdsManager; global.resolveAdsConfig = A.resolveAdsConfig;
+  global.ReferralSystem = R.ReferralSystem; global.createReferralSystem = R.createReferralSystem;
+  ok('adsManager.js + referralSystem.js bisa di-require tanpa DOM penuh', typeof global.AdsManager === 'function' && typeof global.ReferralSystem === 'function');
+}
+
 /* ---------- [3] jalankan boot() lewat game.js ---------- */
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+/** Iklan AdsManager pakai timer nyata: beri kesempatan event loop lalu pump frame. */
+async function waitAdClosed(maxMs = 5000) {
+  const t0 = Date.now();
+  while (/on/.test(getEl('adOverlay').className) && Date.now() - t0 < maxMs) { pump(3, 16); await sleep(12); }
+  pump(3);
+  return !/on/.test(getEl('adOverlay').className);
+}
+(async function main() {
 console.log('\n[2] lapisan browser game.js jalan di DOM tiruan');
 {
   const before = fail;
@@ -176,10 +211,7 @@ console.log('\n[2] lapisan browser game.js jalan di DOM tiruan');
     ok('tombol reward terlihat saat ada offer', /on/.test(getEl('rewardWrap').className), getEl('rewardWrap').className);
     btn.dispatch('click', {});
     ok('overlay "iklan" dibuka (AdsManager.simulateAds)', /on/.test(getEl('adOverlay').className), getEl('adOverlay').className);
-    const t0 = Date.now();
-    // iklan "simulasi" berjalan 1.5s (AdsManager.simulatedAdSeconds) via rAF + performance.now
-    while (/on/.test(getEl('adOverlay').className) && Date.now() - t0 < 6000) pump(20, 16);
-    ok('iklan selesai -> overlay ditutup', getEl('adOverlay').className === '' || !/on/.test(getEl('adOverlay').className), getEl('adOverlay').className);
+    ok('iklan selesai -> overlay ditutup', await waitAdClosed(), getEl('adOverlay').className);
     ok('hadiah diberikan (kuota frenzy berkurang)', R.rewardQuota.frenzy === 1, R.rewardQuota);
     // tombol "ronde berikutnya"
     getEl('againBtn').dispatch('click', {});
@@ -188,12 +220,69 @@ console.log('\n[2] lapisan browser game.js jalan di DOM tiruan');
   }
   ok('tidak ada kegagalan di blok ini', fail === before, { added: fail - before });
 }
+
+/* ---------- [4] integrasi AdsManager + ReferralSystem + profil koin ---------- */
+console.log('\n[4] integrasi iklan + referral di HUD');
+{
+  const before = fail;
+  const G = global.hideSeekGame;
+  ok('window.hideSeekGame tersedia (pause/resume/saveGame/updateUI)', !!G && ['pause', 'resume', 'saveGame', 'updateUI'].every(k => typeof G[k] === 'function'), G && Object.keys(G));
+  ok('game memakai AdsManager asli (bukan fallback lokal)', !!G && !!G.ads, G && !!G.ads);
+  ok('game memakai ReferralSystem', !!G && !!G.referral);
+  ok('HUD menampilkan koin & nyawa', /^🪙 \d+$/.test(getEl('coins').textContent) && /^💚 ×\d+$/.test(getEl('lives').textContent), [getEl('coins').textContent, getEl('lives').textContent]);
+  const R = getRound();
+  /* tombol "Dapatkan Koin" -> showRewarded('bonus_coins') -> +50 koin */
+  G.ads.resetCooldown();
+  getEl('adCoinsBtn').dispatch('click', {});
+  ok('iklan membuka overlay + menjeda permainan', /on/.test(getEl('adOverlay').className) && /on/.test(getEl('pauseTag').className), [getEl('adOverlay').className, getEl('pauseTag').className]);
+  const closed = await waitAdClosed();
+  ok('iklan simulasi selesai -> overlay & jeda dilepas', closed && !/on/.test(getEl('pauseTag').className), [getEl('adOverlay').className, getEl('pauseTag').className]);
+  ok('koin +50 dan ditulis ke localStorage', getEl('coins').textContent === '🪙 50' && /"coins":50/.test(global.localStorage.getItem('hideseek_profile')), [getEl('coins').textContent, global.localStorage.getItem('hideseek_profile')]);
+  /* cooldown global 30s: klik kedua langsung ditolak + toast "Tunggu X detik lagi" */
+  const toastsBefore = getEl('toasts').children.length;
+  getEl('adCoinsBtn').dispatch('click', {});
+  ok('iklan kedua ditolak (cooldown global)', !/on/.test(getEl('adOverlay').className), getEl('adOverlay').className);
+  ok('toast "Tunggu … detik lagi" muncul', getEl('toasts').children.slice(toastsBefore).some(c => /Tunggu \d+ detik lagi/.test(c.textContent)), getEl('toasts').children.slice(toastsBefore).map(c => c.textContent));
+  ok('cooldown juga tersimpan di localStorage[lastAdTime]', /^\d+$/.test(String(global.localStorage.getItem('lastAdTime'))), global.localStorage.getItem('lastAdTime'));
+  /* tombol "+1 Nyawa": di luar peran hider => jadi nyawa cadangan */
+  G.ads.resetCooldown();
+  getEl('adLifeBtn').dispatch('click', {});
+  await waitAdClosed();
+  ok('"Tonton Iklan +1 Nyawa" → nyawa cadangan +1', getEl('lives').textContent === '💚 ×1', getEl('lives').textContent);
+  /* toko lobby: tukar koin -> +1 Max HP */
+  getEl('buyHpBtn').dispatch('click', {});
+  ok('beli +1 Max HP (50 koin) → koin 0, MAX HP 4 di HUD', getEl('coins').textContent === '🪙 0' && getEl('maxhpTag').textContent === 'MAX HP 4', [getEl('coins').textContent, getEl('maxhpTag').textContent]);
+  ok('ronde berjalan belum berubah (diterapkan saat ronde baru)', R.me().maxHp === 3, R.me().maxHp);
+  R.start(false);
+  ok('ronde berikutnya memakai Max HP 4', R.me().maxHp === 4 && R.me().hp === 4, [R.me().maxHp, R.me().hp]);
+  getEl('buyLifeBtn').dispatch('click', {});
+  ok('koin habis → tombol toko dinonaktifkan', getEl('buyLifeBtn').disabled === true && getEl('buyHpBtn').disabled === true, [getEl('buyLifeBtn').disabled, getEl('buyHpBtn').disabled]);
+  /* referral: modal + kode unik + link */
+  getEl('inviteBtn').dispatch('click', {});
+  const modal = getEl('referralModal');
+  const code = modal.querySelector('#refCode').textContent;
+  ok('modal "Undang Teman" terbuka & tidak hidden', modal.hidden === false, modal.hidden);
+  ok('kode referral 6–8 karakter A–Z/0–9', /^[A-Z0-9]{6,8}$/.test(code), code);
+  ok('kode sama dgn localStorage[myReferralCode]', code === global.localStorage.getItem('myReferralCode'), [code, global.localStorage.getItem('myReferralCode')]);
+  ok('link mengundang berisi ?ref=kode', /\?ref=[A-Z0-9]{6,8}$/.test(modal.querySelector('#refLink').textContent), modal.querySelector('#refLink').textContent);
+  ok('teks "100 Koin untuk setiap teman" ada di modal', /100 koin/i.test(modal.innerHTML), modal.innerHTML.slice(0, 0));
+  ok('klik "Salin Link" tidak melempar (tanpa clipboard API)', (() => { try { modal.querySelector('#refCopy').dispatch('click', {}); return true; } catch (e) { return String(e); } })());
+  ok('hadiah pengundang menunggu server (bukan koin palsu)', G.referral.getReferralBonus() === 0, G.referral.getStats());
+  /* pause/resume manual (dipakai SDK iklan) membekukan langkah ronde */
+  const tBefore = R.t;
+  G.pause(); pump(6);
+  ok('game.pause() membekukan langkah ronde', R.t === tBefore, [tBefore, R.t]);
+  G.resume(); pump(6);
+  ok('game.resume() melanjutkan', R.t > tBefore, R.t);
+  ok('tidak ada kegagalan di blok ini', fail === before, { added: fail - before });
+}
+})().catch(e => { console.log('  \x1b[31mEXCEPTION\x1b[0m ' + (e && e.stack || e)); fail++; });
 function getRound() {
   // game.js menyimpan instance di closure boot(); ambil lewat elemen hearts -> tidak bisa,
   // jadi pakai hook: ROUND dipasang sebagai properti global saat startGame (lihat game.js).
   return global.HideSeekRound || null;
 }
-setTimeout(() => {
+process.on('exit', () => {
   console.log(`\n=== web_dom_smoke: ${pass} PASS, ${fail} FAIL ===`);
-  process.exitCode = fail ? 1 : 0;
-}, 60);
+  if (fail) process.exitCode = 1;
+});

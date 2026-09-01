@@ -33,3 +33,12 @@ Thumbs.db
 # Aset mentah dari generator AI (bahan baku pipeline) - hasil akhirnya sudah ada di
 # Assets/Art/HideSeek/, jadi file mentah tidak perlu ikut ke repository.
 ArtRaw/
+
+# ---------- build web (web/) ----------
+# config.js berisi ID iklan: dihasilkan dari .env oleh tools/gen_web_config.js
+web/config.js
+.env
+.env.local
+*.local
+# artefak test/pratinjau yang besar
+ArtRaw/preview_*

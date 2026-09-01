@@ -49,6 +49,98 @@ const CFG = {
   mapW: 17, mapH: 11, tile: 1,         // 1 tile = 1 unit dunia (PPU 128)
 };
 
+/* ------------------ ekonomi profil (koin & nyawa) — bagian ads/referral -------------------
+   Nilai bisa ditimpa dari window.HIDESEEK_CONFIG.economy (web/config.js, dari .env). */
+const ECONOMY = {
+  coinsPerScore: 0.5,     // koin = round(score * coinsPerScore) tiap akhir ronde
+  maxHpPrice: 50, maxHpCap: 2,   // beli +1 Max HP di lobby
+  lifePrice: 25,                 // beli 1 nyawa cadangan tanpa iklan
+  startCoins: 0,
+  profileKey: 'hideseek_profile',
+};
+
+/**
+ * Profil pemain = state yang bertahan antar ronde/refresh (koin, bonus HP,
+ * nyawa cadangan, rekor). Kelas ini sengaja TIDAK menyentuh DOM supaya bisa
+ * diuji headless (tools/web_ads_referral_test.js).
+ */
+class Profile {
+  constructor(storage, cfg) {
+    this.storage = (storage && typeof storage.getItem === 'function') ? storage
+      : (typeof localStorage !== 'undefined' && localStorage) ? localStorage : makeMemoryStore();
+    this.cfg = Object.assign({}, ECONOMY, cfg || {});
+    this.key = this.cfg.profileKey;
+    this.onHP = null;              // hook dari game: terapkan penyembuhan ke pemain aktif
+    this.load();
+  }
+  load() {
+    let d = {};
+    try { d = JSON.parse(this.storage.getItem(this.key) || '{}') || {}; } catch (e) { d = {}; }
+    this.coins = Math.max(0, d.coins | 0 || 0) || (this.cfg.startCoins | 0) || 0;
+    if (!d.coins && this.cfg.startCoins) this.coins = this.cfg.startCoins | 0;
+    this.bonusHp = clamp(d.bonusHp | 0, 0, this.cfg.maxHpCap);
+    this.lives = Math.max(0, d.lives | 0);
+    this.rounds = Math.max(0, d.rounds | 0);
+    this.best = Math.max(0, d.best | 0);
+    this.totalAdRewards = Math.max(0, d.totalAdRewards | 0);
+    return this;
+  }
+  save() {
+    try {
+      this.storage.setItem(this.key, JSON.stringify({
+        coins: this.coins, bonusHp: this.bonusHp, lives: this.lives,
+        rounds: this.rounds, best: this.best, totalAdRewards: this.totalAdRewards,
+      }));
+    } catch (e) { /* mode privat / storage penuh: abaikan */ }
+    return this;
+  }
+  get maxHp() { return CFG.hiderHp + this.bonusHp; }
+  /** Tambah koin (n boleh negatif; tidak pernah di bawah 0). */
+  addCoins(n) { this.coins = Math.max(0, this.coins + (n | 0)); this.save(); return this.coins; }
+  spendCoins(n) { n = n | 0; if (n < 0 || this.coins < n) return false; this.coins -= n; this.save(); return true; }
+  /**
+   * +1 nyawa. Bila ada hook onHP (ronde sedang berjalan) -> langsung sembuh;
+   * kalau tidak, ditahan sebagai pendingHeal utk ronde berikutnya.
+   */
+  addHP(n = 1) {
+    n = Math.max(0, n | 0);
+    const applied = this.onHP ? (this.onHP(n) | 0) : 0;      // >0 = berhasil menyembuhkan
+    if (applied > 0) { this.save(); return { healed: applied, stored: 0 }; }
+    this.addLife(n);                                          // di luar ronde / HP penuh -> cadangan
+    return { healed: 0, stored: n };
+  }
+  /** Nyawa cadangan: dipakai otomatis saat pemain jadi hantu. */
+  addLife(n = 1) { this.lives = Math.min(9, this.lives + (n | 0)); this.save(); return this.lives; }
+  consumeLife() { if (this.lives <= 0) return false; this.lives -= 1; this.save(); return true; }
+  buyMaxHp() {
+    if (this.bonusHp >= this.cfg.maxHpCap) return { ok: false, why: 'bonus Max HP sudah maksimum' };
+    if (!this.spendCoins(this.cfg.maxHpPrice)) return { ok: false, why: 'koin kurang (' + this.cfg.maxHpPrice + ' dibutuhkan)' };
+    this.bonusHp += 1; this.save();
+    return { ok: true, maxHp: this.maxHp };
+  }
+  buyLife() {
+    if (!this.spendCoins(this.cfg.lifePrice)) return { ok: false, why: 'koin kurang (' + this.cfg.lifePrice + ' dibutuhkan)' };
+    this.addLife(1);
+    return { ok: true, lives: this.lives };
+  }
+  /** Koin hasil ronde + rekor (dipanggil GameManager saat RESULT). */
+  finishRound(score) {
+    const gained = Math.max(0, Math.round((score | 0) * this.cfg.coinsPerScore));
+    this.coins += gained; this.rounds += 1; this.best = Math.max(this.best, score | 0);
+    this.save();
+    return gained;
+  }
+  noteAdReward() { this.totalAdRewards += 1; this.save(); }
+  reset() { this.coins = 0; this.bonusHp = 0; this.lives = 0; this.rounds = 0; this.best = 0; this.totalAdRewards = 0; this.save(); }
+}
+/** Fallback storage (node / mode privat). */
+function makeMemoryStore() { const m = new Map(); return { getItem: k => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: k => m.delete(k) }; }
+/** Ambil config global (web/config.js) — aman bila tidak ada. */
+function globalCfg(section) {
+  const all = (typeof window !== 'undefined' && window.HIDESEEK_CONFIG) || null;
+  return all && section && all[section] ? all[section] : null;
+}
+
 /* ============================ util ============================ */
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const lerp = (a, b, t) => a + (b - a) * t;
@@ -141,7 +233,8 @@ class PlayerState {
   constructor(id, name, role) {
     this.id = id; this.name = name; this.role = role;      // 0 Hider, 1 Seeker
     this.x = 0; this.y = 0; this.rot = 0;
-    this.hp = CFG.hiderHp; this.ghost = (role !== 0);       // seeker tak punya HP
+    this.maxHp = CFG.hiderHp;                                // + bonus dari profil (Profile.maxHp)
+    this.hp = this.maxHp; this.ghost = (role !== 0);         // seeker tak punya HP
     this.alive = true;
     this.camoRgb = null; this.camoTarget = null;
     this.propDef = null; this.propUntil = 0;
@@ -156,6 +249,13 @@ class PlayerState {
     this.spawnX = 0; this.spawnY = 0;
   }
   get isHider() { return this.role === 0; }
+  /** +1 nyawa (reward iklan/referral) — dibatasi maxHp, sesuai spesifikasi. */
+  addHP(n = 1) {
+    const before = this.hp;
+    if (this.ghost) { this.hp = Math.min(this.maxHp, Math.max(1, n | 0)); this.ghost = false; this.alive = true; }
+    else this.hp = Math.min(this.maxHp, this.hp + Math.max(0, n | 0));
+    return this.hp - before;
+  }
   get speedNow() {
     // PlayerController.CurrentSpeed: pushback → 0, slow → *factor, Seeker → *1.15*boost
     const t = this.round ? this.round.t : now();
@@ -188,6 +288,7 @@ class Round {
     this.results = null;
     this.lastHiderId = 0;
     this.onAds = opts.onAds || null;           // (offer, cb) -> tunjukkan rewarded ad
+    this.bonusHpProvider = opts.bonusHpProvider || null;  // () => bonus Max HP dari profil (ads/referral)
   }
   on(fn) { this.listeners.push(fn); }
   emit(ev) { for (const fn of this.listeners) { try { fn(ev, this); } catch (e) { console.warn(e); } } }
@@ -223,7 +324,11 @@ class Round {
     seeker.role = 1;
     this.seekerId = seeker.id;
     for (const p of ps) {
-      p.hp = CFG.hiderHp; p.ghost = false; p.alive = true;
+      // Max HP lokal = CFG.hiderHp + bonus profil; penyembuhan tertunda dipakai di sini.
+      const isMe = p.id === this.myId;
+      p.maxHp = CFG.hiderHp + (isMe && this.bonusHpProvider ? (this.bonusHpProvider() | 0) : 0);
+      p.hp = p.maxHp;
+      p.ghost = false; p.alive = true;
       p.camoRgb = p.camoTarget = null; p.propDef = null; p.propUntil = 0;
       p.slowUntil = 0; p.boostUntil = 0; p.pushUntil = 0; p.invulnUntil = 0; p.safeUntil = 0;
       p.cdHider = p.cdSeeker = 0; p.catches = 0; p.survived = 0; p.score = 0; p.lastCatch = -9;
@@ -231,6 +336,7 @@ class Round {
       this.assignSpawn(p);
     }
     this.results = null;
+    if (this.phase === 'RESULT') clearInterval(this._resultIv);
     this.enterPhase(countdown ? 'COUNTDOWN' : 'HIDE');
   }
   enterPhase(name) {
@@ -576,7 +682,7 @@ class Round {
  * BROWSER LAYER — asset, renderer, HUD, input, net client, "iklan"
  * ============================================================================= */
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { CFG, Round, PlayerState, buildMap, spawnFor, PROPS, TILES, clamp, dist, fmtTime };
+  module.exports = { CFG, ECONOMY, Profile, Round, PlayerState, buildMap, spawnFor, PROPS, TILES, clamp, dist, fmtTime, makeMemoryStore };
 }
 
 if (typeof document !== 'undefined') (function boot() {
@@ -883,29 +989,140 @@ if (typeof document !== 'undefined') (function boot() {
     else if (ROUND.phase === 'HIDE') ROUND.useCamouflage(p);   // tap = cepat camo saat bersembunyi
   });
 
-  /* ---------- "iklan" reward — AdsManager.simulateAds ---------- */
+  /* ============================================================================
+   * META — AdsManager (AppLixir/AdinPlay/simulasi) + ReferralSystem + profil
+   * ========================================================================== */
+  const profile = new Profile(typeof localStorage !== 'undefined' ? localStorage : null, globalCfg('economy') || {});
+  let metaPaused = false;                        // True selama iklan tayang -> step() ditahan
+  /** Facade "player" sesuai contoh di integration-guide.md. */
+  const playerAPI = {
+    get hp() { const p = ROUND && ROUND.me(); return p ? p.hp : profile.maxHp; },
+    get maxHp() { return profile.maxHp; },
+    get coins() { return profile.coins; },
+    /** player.addHP(1) -> player.hp = min(hp+1, maxHp); di luar ronde jadi nyawa cadangan. */
+    addHP(n) { const r = profile.addHP(n); updateUI(); return r.healed || r.stored; },
+    addCoins(n) { const v = profile.addCoins(n); updateUI(); return v; },
+    save() { profile.save(); },
+  };
+  const gameAPI = {
+    player: playerAPI, profile,
+    pause() { metaPaused = true; $('pauseTag').className = 'on'; },
+    resume() { metaPaused = false; $('pauseTag').className = ''; },
+    saveGame() { profile.save(); },
+    updateUI() { updateUI(); },
+    ads: null, referral: null,          // diisi setelah keduanya dibuat (debug + test)
+  };
+  window.hideSeekGame = gameAPI;                 // debugging: hideSeekGame.player.addCoins(999)
+
+  /* ----- overlay iklan (dipakai AdsManager lewat hook, dan fallback lokal) ----- */
+  const adOverlay = {
+    show(label) {
+      $('adText').textContent = label || 'Iklan…';
+      $('adBar').style.width = '0%';
+      $('adOverlay').className = 'on';
+    },
+    progress(k) { $('adBar').style.width = Math.round(clamp(k, 0, 1) * 100) + '%'; },
+    hide() { $('adOverlay').className = ''; },
+    notify(msg) { toast(msg, 3200); },
+  };
+  const ads = (typeof window.AdsManager === 'function')
+    ? new window.AdsManager({ game: gameAPI, overlay: adOverlay, storage: (typeof localStorage !== 'undefined' ? localStorage : null) })
+    : null;
+  /** Placement utk tiap reward internal game (rewarded video). */
+  const OFFER_ADS = {
+    revive: ['extra_life', 'Hidup lagi +1 HP …'],
+    skip: ['skip_cooldown', 'Cooldown skill direset…'],
+    frenzy: ['frenzy', `Frenzy ${CFG.frenzyTime}s: +25% speed, jangkauan tangkap +${CFG.frenzyRange}`],
+    extra_life: ['extra_life', '+1 Nyawa …'],
+    bonus_coins: ['bonus_coins', '+50 Koin …'],
+  };
   let adBusy = false;
-  function showRewardAd(offer, cb) {
-    if (adBusy) { cb(false); return; }
+  /**
+   * Satu pintu utk semua rewarded video.
+   * @returns {boolean} false bila ditolak (sedang tayang / cooldown global 30s)
+   */
+  function runAd(offerKey, onReward) {
+    const [placement, label] = OFFER_ADS[offerKey] || [offerKey || 'rewarded_video', 'Iklan…'];
+    if (adBusy) return false;
     adBusy = true;
-    const ov = $('adOverlay'), bar = $('adBar'), txt = $('adText');
-    ov.className = 'on';
-    txt.textContent = offer.key === 'revive' ? 'Hidup lagi +1 HP …' : offer.key === 'skip' ? 'Cooldown skill direset…' : `Frenzy ${CFG.frenzyTime}s: +25% speed, jangkauan tangkap +${CFG.frenzyRange}`;
-    const t0 = performance.now(), ms = CFG.adSimSeconds * 1000;
+    let settled = false;
+    const finish = (okFlag) => {
+      if (settled) return; settled = true; adBusy = false;
+      if (okFlag === true) { profile.noteAdReward(); if (onReward) onReward(); }
+      updateUI();
+    };
+    if (ads) {
+      if (!ads.showRewarded(placement, () => finish(true), () => finish(false))) { adBusy = false; return false; }
+      return true;
+    }
+    return simulateAdLocal(label, finish);      // SDK/config tidak ada -> simulasi internal
+  }
+  /** Fallback simulasi (sama seperti AdsManager.simulateAds di Unity) 1.5 detik. */
+  function simulateAdLocal(label, finish) {
+    const ms = Math.max(10, (ads ? ads.cfg.simSeconds : CFG.adSimSeconds) * 1000);
+    console.log('📺 [SIMULASI] Iklan reward ditonton!');
+    adOverlay.show(label);
+    const t0 = performance.now();
     let done = false;
-    const finish = ok => { if (done) return; done = true; ov.className = ''; adBusy = false; cb(ok); };
-    $('adSkipBtn').onclick = () => finish(false);
+    const stop = (okFlag) => { if (done) return; done = true; adOverlay.hide(); adOverlay.progress(1); finish(okFlag); };
+    simulateAdLocal.cancel = () => stop(false);
     (function loop() {
       const k = Math.min(1, (performance.now() - t0) / ms);
-      bar.style.width = (k * 100) + '%';
-      if (k < 1 && !done) requestAnimationFrame(loop); else finish(true);
+      adOverlay.progress(k);
+      if (k < 1 && !done) requestAnimationFrame(loop); else stop(true);
     })();
+    return true;
   }
+  $('adSkipBtn').onclick = () => { if (ads) ads.cancelSimulation(); if (simulateAdLocal.cancel) simulateAdLocal.cancel(); };
+
+  /* ----- referral (Undang Teman) ----- */
+  const referral = (typeof window.createReferralSystem === 'function') ? window.createReferralSystem({ player: playerAPI, notify: m => toast(m, 4200) })
+    : (typeof window.ReferralSystem === 'function') ? new window.ReferralSystem({ player: playerAPI, notify: m => toast(m, 4200) })
+      : null;
+  if (referral) {
+    const res = referral.checkOnLoad ? referral.checkOnLoad() : null;   // baca ?ref= SEKALI
+    if (res && res.granted) console.log('🎁 referral diterima dari kode ' + res.code);
+    referral.flushPendingRewards && referral.flushPendingRewards();
+  }
+  gameAPI.ads = ads; gameAPI.referral = referral;
+  window.hideSeekReferral = referral;            // konsol: hideSeekReferral.getStats()
+
+  /* ----- HUD meta: koin, nyawa cadangan, tombol iklan & undang teman ----- */
+  function updateUI() {
+    const txt = (id, v) => { const el = $(id); if (el) el.textContent = v; };
+    txt('coins', '🪙 ' + profile.coins); txt('lives', '💚 ×' + profile.lives);
+    txt('coinsLobby', profile.coins); txt('livesLobby', profile.lives);
+    txt('maxhpTag', 'MAX HP ' + profile.maxHp);
+    const c = profile.coins;
+    $('buyHpBtn').textContent = `+1 Max HP — ${profile.cfg.maxHpPrice} 🪙`;
+    $('buyHpBtn').disabled = c < profile.cfg.maxHpPrice || profile.bonusHp >= profile.cfg.maxHpCap;
+    $('buyLifeBtn').textContent = `+1 Nyawa — ${profile.cfg.lifePrice} 🪙`;
+    $('buyLifeBtn').disabled = c < profile.cfg.lifePrice;
+    $('adLifeBtn').disabled = adBusy; $('adCoinsBtn').disabled = adBusy; $('inviteBtn').disabled = !referral;
+    if (ROUND) hud();
+  }
+  /* Tombol "Tonton Iklan +1 Nyawa" / "Dapatkan Koin" (sesuai spesifikasi adsManager). */
+  $('adLifeBtn').onclick = () => runAd('extra_life', () => { playerAPI.addHP(1); toast('💚 +1 nyawa'); });
+  $('adCoinsBtn').onclick = () => runAd('bonus_coins', () => { playerAPI.addCoins(50); toast('🪙 +50 koin'); });
+  $('inviteBtn').onclick = () => { if (referral) referral.showInviteModal(); else toast('referralSystem.js belum dimuat'); };
+  $('inviteLobbyBtn').onclick = () => { if (referral) referral.showInviteModal(); else toast('referralSystem.js belum dimuat'); };
+  $('buyHpBtn').onclick = () => {
+    const r = profile.buyMaxHp();
+    toast(r.ok ? `⬆ Max HP jadi ${profile.maxHp}` : '⚠ ' + r.why);
+    updateUI();
+  };
+  $('buyLifeBtn').onclick = () => {
+    const r = profile.buyLife();
+    toast(r.ok ? `💚 Nyawa cadangan: ${profile.lives}` : '⚠ ' + r.why);
+    updateUI();
+  };
+  updateUI();
 
   /* ---------- loop utama ---------- */
   let last = performance.now();
   function frame(t) {
     const dt = Math.min(0.05, (t - last) / 1000); last = t;
+    if (metaPaused) { return requestAnimationFrame(frame); }        // iklan tayang -> beku
     if (ROUND && netMode !== 'client') { keyInput(); ROUND.step(dt); }
     else if (ROUND) { keyInput(); ROUND.t += dt; ROUND.tickPhaseClient?.(); }
     if (ROUND) { buildSkills(); hud(); draw(); }
@@ -929,12 +1146,29 @@ if (typeof document !== 'undefined') (function boot() {
       $('sizeSel').appendChild(o);
     }
     $('nameInput').value = localStorage.getItem('hs_name') || ('pemain' + (100 + rnd(899)));
-    ROUND = new Round({ map, onAds: showRewardAd });
+    ROUND = new Round({
+      map,
+      // Reward internal (revive/skip/frenzy) juga lewat AdsManager -> cooldown 30s + platform choice.
+      onAds: (offer, cb) => { if (!runAd(offer.key, () => cb(true))) cb(false); },
+      bonusHpProvider: () => profile.bonusHp,
+    });
     ROUND.tileRgb = tileRgb;      // null selama sprite belum siap -> fallback warna tiles
     window.HideSeekRound = ROUND;      // pegangan debug (console) + smoke test node
     let lastPhase = '';
     ROUND.on(e => {
-      if (e.type === 'result') showResult(e.results);
+      if (e.type === 'result') {
+        showResult(e.results);
+        const me = ROUND.me();
+        if (me) {
+          const gained = profile.finishRound(me.score | 0);
+          if (gained > 0) toast(`🪙 +${gained} koin (skor ${me.score})`, 3200);
+          updateUI();
+        }
+      }
+      // Nyawa cadangan hasil iklan/referral dipakai otomatis sebelum jadi hantu.
+      if (e.type === 'ghost' && e.id === ROUND.myId && profile.lives > 0 && (ROUND.phase === 'HIDE' || ROUND.phase === 'SEEK')) {
+        if (profile.consumeLife()) { ROUND.revive(e.id); toast('💚 Nyawa cadangan dipakai — hidup lagi!', 3000); updateUI(); }
+      }
       if (e.type === 'phase' && e.name !== lastPhase) {
         lastPhase = e.name;
         if (e.name === 'COUNTDOWN') { $('result').className = 'panel hidden'; clearInterval(showResult._iv); }
