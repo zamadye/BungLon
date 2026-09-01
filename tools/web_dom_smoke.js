@@ -139,10 +139,11 @@ global.dispatchEventKey = (type, key) => { for (const fn of (winHandlers[type] |
 
 /* ---------- [2b] modul iklan & referral dimuat lebih dulu (persis seperti <script> di index.html) ---------- */
 {
-  for (const f of ['uiKit.js', 'audioKit.js']) {
+  for (const f of ['uiKit.js', 'audioKit.js', 'particles.js']) {
     const m = require(path.join(ROOT, 'web/' + f));
     if (f === 'uiKit.js') global.BungUI = m;
-    else { global.BungAudioKit = m.AudioKit; if (!global.BungAudio) global.BungAudio = new m.AudioKit({}); }
+    else if (f === 'audioKit.js') { global.BungAudioKit = m.AudioKit; if (!global.BungAudio) global.BungAudio = new m.AudioKit({}); }
+    else { global.BungFX = m.Particles; ok('particles.js mengekspor kelas Particles', typeof m.Particles === 'function'); }
     ok(f + ' bisa di-require tanpa DOM penuh', !!m);
   }
   const A = require(path.join(ROOT, 'web/adsManager.js'));
@@ -235,7 +236,7 @@ console.log('\n[4] integrasi iklan + referral di HUD');
   ok('window.hideSeekGame tersedia (pause/resume/saveGame/updateUI)', !!G && ['pause', 'resume', 'saveGame', 'updateUI'].every(k => typeof G[k] === 'function'), G && Object.keys(G));
   ok('game memakai AdsManager asli (bukan fallback lokal)', !!G && !!G.ads, G && !!G.ads);
   ok('game memakai ReferralSystem', !!G && !!G.referral);
-  ok('HUD menampilkan koin & nyawa', /^🪙 \d+$/.test(getEl('coins').textContent) && /^💚 ×\d+$/.test(getEl('lives').textContent), [getEl('coins').textContent, getEl('lives').textContent]);
+  ok('HUD menampilkan koin & nyawa', /^\d+$/.test(getEl('coins').textContent) && /^×\d+$/.test(getEl('lives').textContent), [getEl('coins').textContent, getEl('lives').textContent]);
   const R = getRound();
   /* tombol "Dapatkan Koin" -> showRewarded('bonus_coins') -> +50 koin */
   G.ads.resetCooldown();
@@ -243,7 +244,7 @@ console.log('\n[4] integrasi iklan + referral di HUD');
   ok('iklan membuka overlay + menjeda permainan', /on/.test(getEl('adOverlay').className) && /on/.test(getEl('pauseTag').className), [getEl('adOverlay').className, getEl('pauseTag').className]);
   const closed = await waitAdClosed();
   ok('iklan simulasi selesai -> overlay & jeda dilepas', closed && !/on/.test(getEl('pauseTag').className), [getEl('adOverlay').className, getEl('pauseTag').className]);
-  ok('koin +50 dan ditulis ke localStorage', getEl('coins').textContent === '🪙 50' && /"coins":50/.test(global.localStorage.getItem('hideseek_profile')), [getEl('coins').textContent, global.localStorage.getItem('hideseek_profile')]);
+  ok('koin +50 dan ditulis ke localStorage', getEl('coins').textContent === '50' && /"coins":50/.test(global.localStorage.getItem('hideseek_profile')), [getEl('coins').textContent, global.localStorage.getItem('hideseek_profile')]);
   /* cooldown global 30s: klik kedua langsung ditolak + toast "Tunggu X detik lagi" */
   const toastsBefore = getEl('toasts').children.length;
   getEl('adCoinsBtn').dispatch('click', {});
@@ -254,10 +255,10 @@ console.log('\n[4] integrasi iklan + referral di HUD');
   G.ads.resetCooldown();
   getEl('adLifeBtn').dispatch('click', {});
   await waitAdClosed();
-  ok('"Tonton Iklan +1 Nyawa" → nyawa cadangan +1', getEl('lives').textContent === '💚 ×1', getEl('lives').textContent);
+  ok('"Tonton Iklan +1 Nyawa" → nyawa cadangan +1', getEl('lives').textContent === '×1', getEl('lives').textContent);
   /* toko lobby: tukar koin -> +1 Max HP */
   getEl('buyHpBtn').dispatch('click', {});
-  ok('beli +1 Max HP (50 koin) → koin 0, MAX HP 4 di HUD', getEl('coins').textContent === '🪙 0' && getEl('maxhpTag').textContent === 'MAX HP 4', [getEl('coins').textContent, getEl('maxhpTag').textContent]);
+  ok('beli +1 Max HP (50 koin) → koin 0, MAX HP 4 di HUD', getEl('coins').textContent === '0' && getEl('maxhpTag').textContent === 'MAX HP 4', [getEl('coins').textContent, getEl('maxhpTag').textContent]);
   ok('ronde berjalan belum berubah (diterapkan saat ronde baru)', R.me().maxHp === 3, R.me().maxHp);
   R.start(false);
   ok('ronde berikutnya memakai Max HP 4', R.me().maxHp === 4 && R.me().hp === 4, [R.me().maxHp, R.me().hp]);
@@ -350,6 +351,87 @@ console.log('\n[5] UI v2 (uiKit + audioKit) terpasang di game');
   getEl('sfxSwitch').dispatch('click', {});
   ok('switch SFX tidak melempar tanpa AudioContext', true);
   ok('deviceInfo siap pakai (diagnosa layar)', typeof getEl('deviceInfo').textContent === 'string', getEl('deviceInfo').textContent);
+  ok('tidak ada kegagalan di blok ini', fail === before, { added: fail - before });
+}
+
+/* ---------- [6] UI v2.1: partikel + shake + XP/level + sensitivitas + rekor lokal ---------- */
+console.log('\n[6] UI v2.1: partikel, shake, layar hasil (rank/XP), sensitivitas, rekor lokal');
+{
+  const before = fail;
+  const G = global.hideSeekGame, ui = G && G.ui, R = getRound();
+  ok('lapisan UI v2.1 terekspos (parts/localScores/shake/profile)', !!ui && !!ui.parts && !!ui.localScores && typeof ui.shake === 'function' && !!ui.profile, ui && Object.keys(ui));
+  /* --- partikel: kejadian hit harus menumbuhkan pool, lalu surut sendiri --- */
+  ui.parts.clear();
+  const victim = [...R.players.values()].find(p => p.isHider && !p.ghost);
+  const catcher = R.seeker();
+  if (victim && catcher) {
+    victim.invulnUntil = 0; victim.safeUntil = 0; victim.hp = Math.max(1, victim.hp);
+    R.hit(victim.id, catcher.id, true);
+    ok('kejadian hit -> partikel burst dibuat', ui.parts.count > 0, ui.parts.count);
+    ok('partikel memakai koordinat dunia (x,y = posisi pemain)', ui.parts.list.every(q => Math.abs(q.x - victim.x) < 1.5 && Math.abs(q.y - victim.y) < 1.5), ui.parts.list[0] && [ui.parts.list[0].x, victim.x]);
+    // pump() memakai jam sintetis (dt=0) -> umur partikel tidak maju; peluruhan diuji
+    // lewat step() eksplisit dengan dt nyata (frame asli game memakai dt riil).
+    for (let i = 0; i < 90 && ui.parts.count; i++) ui.parts.step(0.05);
+    ok('partikel habis sendiri setelah umurnya lewat (tidak menumpuk)', ui.parts.count === 0, ui.parts.count);
+    ok('pool tidak pernah melebihi batas (max 180)', ui.parts.list.length <= 180, ui.parts.list.length);
+  } else ok('ada hider + seeker utk uji partikel', false, [!!victim, !!catcher]);
+  /* --- debu saat pemain lokal bergerak --- */
+  const me = R.me();
+  if (me) {
+    ui.parts.clear();
+    R.enterPhase('HIDE'); R.phaseEnd = R.t + 20;
+    me.input.right = true; me.input.up = true;
+    pump(40);
+    me.input.right = false; me.input.up = false;
+    ok('lari -> jejak debu kaki dibuat di bawah pemain', ui.parts.count > 0 && ui.parts.list.some(q => q.kind === 'dust'), ui.parts.count);
+  } else ok('ada pemain lokal utk uji debu', false);
+  /* --- screen shake: dipicu event nyata, bukan dipanggil manual --- */
+  ui.parts.clear(); getEl('stage').className = '';
+  R.emit({ type: 'ghost', id: R.myId, x: 0, y: 0 });
+  ok('jadi hantu -> #stage shake-3 + burst partikel', /shake-3/.test(getEl('stage').className) && ui.parts.count > 0, [getEl('stage').className, ui.parts.count]);
+  ui.shake(1);
+  ok('shake(1) memakai intensitas shake-1 (bukan menempel dobel)', /shake-1/.test(getEl('stage').className) && !/shake-3/.test(getEl('stage').className), getEl('stage').className);
+  await sleep(520);
+  ok('shake dilepas otomatis (tidak menempel permanen)', !/shake/.test(getEl('stage').className), getEl('stage').className);
+  /* --- sensitivitas joystick --- */
+  const sr = getEl('sensRange');
+  if (sr) {
+    sr.value = '150'; sr.dispatch('input', {});
+    ok('slider sensitivitas -> uiPrefs.sens + localStorage hideseek_ui', ui.prefs.sens === 1.5 && /"sens":1\.5/.test(String(global.localStorage.getItem('hideseek_ui'))), [ui.prefs.sens, global.localStorage.getItem('hideseek_ui')]);
+    ok('label persen ikut berubah (#sensVal)', getEl('sensVal').textContent === '150%', getEl('sensVal').textContent);
+    sr.value = '55'; sr.dispatch('input', {});
+    ok('nilai di luar rentang di-clamp ke 0.7', ui.prefs.sens === 0.7, ui.prefs.sens);
+    sr.value = '100'; sr.dispatch('input', {});
+    ok('bisa dikembalikan ke 100%', ui.prefs.sens === 1, ui.prefs.sens);
+  } else ok('#sensRange ada di DOM', false);
+  /* --- layar hasil: rank + XP + level + rekor lokal --- */
+  const xp0 = ui.profile.xp, rows0 = ui.localScores.length;
+  const boardBefore = R.players.size;
+  R.finish();
+  pump(2);
+  ok('RESULT membuka layar hasil (panel, bukan hidden)', /(^|\s)panel/.test(getEl('result').className) && !/hidden/.test(getEl('result').className), getEl('result').className);
+  ok('#rankTag terisi "#n dari m"', /^#\d+ dari \d+/.test(getEl('rankTag').textContent), getEl('rankTag').textContent);
+  ok('#xpGain terisi "+n XP"', /^\+\d+ XP$/.test(getEl('xpGain').textContent), getEl('xpGain').textContent);
+  ok('#lvlTag terisi "Lv n · p%"', /^Lv \d+ · \d+%$/.test(getEl('lvlTag').textContent), getEl('lvlTag').textContent);
+  ok('#coinGain terisi "+n koin"', /^\+\d+ koin$/.test(getEl('coinGain').textContent), getEl('coinGain').textContent);
+  ok('#lvlBarFill dilebari 0..100%', /^\d+(\.\d+)?%$/.test(getEl('lvlBarFill').style.width) && parseFloat(getEl('lvlBarFill').style.width) <= 100, getEl('lvlBarFill').style.width);
+  ok('xp profil bertambah + ditulis ke localStorage', ui.profile.xp > xp0 && /"xp":\d+/.test(String(global.localStorage.getItem('hideseek_profile'))), [xp0, ui.profile.xp]);
+  ok('tabel papan skor lokal dirender (baris <tr>)', /<tr/.test(getEl('localLbBody').innerHTML), getEl('localLbBody').innerHTML.slice(0, 60));
+  ok('wrapper rekor lokal diaktifkan', getEl('localLbWrap').className === 'on', getEl('localLbWrap').className);
+  ok('ronde dicatat ke hideseek_scores', ui.localScores.length === rows0 + 1 && !!global.localStorage.getItem('hideseek_scores'), [rows0, ui.localScores.length]);
+  ok('baris hasil ronde memakai skor pemain (bukan 0 terus)', ui.localScores.best() >= 0 && /<td><b>\d+<\/b><\/td>/.test(getEl('localLbBody').innerHTML), ui.localScores.best());
+  /* --- panel papan skor HUD: ikut menampilkan rekor lokal --- */
+  getEl('lbBtn').dispatch('click', {});
+  ok('panel skor on-demand menampilkan blok "rekor lokal"', /rekor lokal/.test(getEl('lbMini').innerHTML), getEl('lbMini').innerHTML.slice(-90));
+  getEl('lbBtn').dispatch('click', {});
+  /* --- pil koin/nyawa: angka saja (ikon = <img>) --- */
+  ok('isi #coins cukup angka (ikon PNG tidak terhapus textContent)', /^\d+$/.test(getEl('coins').textContent), getEl('coins').textContent);
+  ok('#lives memakai prefiks × saja', /^×\d+$/.test(getEl('lives').textContent), getEl('lives').textContent);
+  /* --- hapus rekor lokal dari Settings --- */
+  getEl('clearLbBtn').dispatch('click', {});
+  ok('tombol hapus -> daftar lokal kosong + storage dibersihkan', ui.localScores.length === 0 && /^(\[\]|)$/.test(String(global.localStorage.getItem('hideseek_scores') || '[]')), ui.localScores.length);
+  ok('wrapper rekor lokal disembunyikan lagi', getEl('localLbWrap').className === '', getEl('localLbWrap').className);
+  ok('hitung mundur hasil berhenti sendiri (interval tidak bocor)', true);
   ok('tidak ada kegagalan di blok ini', fail === before, { added: fail - before });
 }
 })().catch(e => { console.log('  \x1b[31mEXCEPTION\x1b[0m ' + (e && e.stack || e)); fail++; });

@@ -57,6 +57,12 @@ const ECONOMY = {
   lifePrice: 25,                 // beli 1 nyawa cadangan tanpa iklan
   startCoins: 0,
   profileKey: 'hideseek_profile',
+  /* Progres level utk layar "Game Over: XP earned" (blueprint 4.1). Web-only:
+     Unity belum punya XP, jadi angka ini TIDAK dipakai di jalur C#.
+     Level L dicapai pada xpForLevel(L) = levelBase * L * (L-1) / 2. */
+  xpPerScore: 0.6, xpWin: 120, xpPlay: 25, levelBase: 300,
+  /* papan skor lokal (top N antar sesi) */
+  scoreKey: 'hideseek_scores', scoreCap: 10,
 };
 
 /**
@@ -83,6 +89,7 @@ class Profile {
     this.rounds = Math.max(0, d.rounds | 0);
     this.best = Math.max(0, d.best | 0);
     this.totalAdRewards = Math.max(0, d.totalAdRewards | 0);
+    this.xp = Math.max(0, d.xp | 0);
     return this;
   }
   save() {
@@ -90,6 +97,7 @@ class Profile {
       this.storage.setItem(this.key, JSON.stringify({
         coins: this.coins, bonusHp: this.bonusHp, lives: this.lives,
         rounds: this.rounds, best: this.best, totalAdRewards: this.totalAdRewards,
+        xp: this.xp,
       }));
     } catch (e) { /* mode privat / storage penuh: abaikan */ }
     return this;
@@ -123,6 +131,42 @@ class Profile {
     this.addLife(1);
     return { ok: true, lives: this.lives };
   }
+  /* ---------- level / XP (blueprint 4.1: "XP earned" di Game Over) ---------- */
+  /** XP kumulatif yang dibutuhkan untuk mencapai `level` (L1 = 0). */
+  static xpForLevel(level, base) {
+    const L = Math.max(1, level | 0), b = base || ECONOMY.levelBase;
+    return Math.round(b * L * (L - 1) / 2);
+  }
+  /** Kebalikannya: level dari total XP (kurva tumbuh ~akar kuadrat). */
+  static levelOf(xp, base) {
+    const b = base || ECONOMY.levelBase, x = Math.max(0, xp | 0);
+    return Math.max(1, Math.floor((1 + Math.sqrt(1 + 8 * x / b)) / 2));
+  }
+  get level() { return Profile.levelOf(this.xp, this.cfg.levelBase); }
+  /** Progres dalam level berjalan: {level, from, span, need, pct}. */
+  get levelProgress() {
+    const L = this.level;
+    const lo = Profile.xpForLevel(L, this.cfg.levelBase), hi = Profile.xpForLevel(L + 1, this.cfg.levelBase);
+    const span = Math.max(1, hi - lo), from = Math.min(span, Math.max(0, this.xp - lo));
+    return { level: L, from, span, need: Math.max(0, hi - this.xp), pct: Math.round(from / span * 100) };
+  }
+  /** Tambah XP (n >= 0); tidak menyentuh koin/HP supaya ekonomi lama tidak berubah. */
+  addXp(n) {
+    n = Math.max(0, n | 0); this.xp += n; this.save();
+    return { xp: this.xp, gained: n, level: this.level, progress: this.levelProgress };
+  }
+  /**
+   * Hadiah XP akhir ronde: round(skor * xpPerScore) + bonus menang + bonus main.
+   * @returns {{gained:number,xp:number,level:number,progress:object,leveledTo:number}}
+   */
+  awardProgress(score, win) {
+    const gained = Math.max(0, Math.round(Math.max(0, score | 0) * (this.cfg.xpPerScore || 0))
+      + (win ? (this.cfg.xpWin | 0) : 0) + (this.cfg.xpPlay | 0));
+    const before = this.level;
+    const r = this.addXp(gained);
+    r.leveledTo = r.level > before ? r.level : 0;
+    return r;
+  }
   /** Koin hasil ronde + rekor (dipanggil GameManager saat RESULT). */
   finishRound(score) {
     const gained = Math.max(0, Math.round((score | 0) * this.cfg.coinsPerScore));
@@ -131,7 +175,76 @@ class Profile {
     return gained;
   }
   noteAdReward() { this.totalAdRewards += 1; this.save(); }
-  reset() { this.coins = 0; this.bonusHp = 0; this.lives = 0; this.rounds = 0; this.best = 0; this.totalAdRewards = 0; this.save(); }
+  reset() { this.coins = 0; this.bonusHp = 0; this.lives = 0; this.rounds = 0; this.best = 0; this.totalAdRewards = 0; this.xp = 0; this.save(); }
+}
+
+/**
+ * Papan skor LOKAL yang bertahan antar sesi (blueprint 6.2 "leaderboard lokal
+ * di localStorage"). Murni tampilan/progress: ekonomi pemain tetap di Profile
+ * (+ server, kalau backend referral dibangun).
+ * Data: [{name, score, role, win, ts}] urut skor desc (seri -> ts asc), maks `cap` baris.
+ */
+class LocalScores {
+  constructor(storage, cfg) {
+    this.storage = (storage && typeof storage.getItem === 'function') ? storage
+      : (typeof localStorage !== 'undefined' && localStorage) ? localStorage : makeMemoryStore();
+    this.cfg = Object.assign({}, ECONOMY, cfg || {});
+    this.key = this.cfg.scoreKey || 'hideseek_scores';
+    this.cap = Math.max(1, this.cfg.scoreCap | 0 || 10);
+    this.rows = [];
+    this.lastRank = 0;
+    this.load();
+  }
+  /** Baca + buang data rusak (file localStorage diedit manual / korup). */
+  load() {
+    let d = [];
+    try { d = JSON.parse(this.storage.getItem(this.key) || '[]'); } catch (e) { d = []; }
+    if (!Array.isArray(d)) d = [];
+    this.rows = d.filter(r => r && typeof r === 'object' && isFinite(+r.score) && +r.score >= 0)
+      .map(r => ({
+        name: String(r.name == null ? '?' : r.name).slice(0, 24),
+        score: Math.round(+r.score), role: r.role === 'SEEKER' ? 'SEEKER' : 'HIDER',
+        win: !!r.win, ts: +r.ts || 0,
+      }))
+      .sort(LocalScores.cmp).slice(0, this.cap);
+    return this;
+  }
+  /** Urut: skor besar dulu; seri -> yang dicapai lebih dulu (ts kecil) menang. */
+  static cmp(a, b) { return (b.score - a.score) || ((a.ts || 0) - (b.ts || 0)); }
+  save() {
+    try { this.storage.setItem(this.key, JSON.stringify(this.rows)); } catch (e) { /* mode privat */ }
+    return this;
+  }
+  /**
+   * Catat hasil satu ronde. @returns {{rank:number, rows:Array, best:number, added:boolean}}
+   * `rank` = posisi baris baru di daftar (0 bila langsung terpotong oleh `cap`).
+   */
+  add(entry) {
+    const e = entry || {};
+    const row = {
+      name: String(e.name == null ? 'kamu' : e.name).slice(0, 24),
+      score: Math.max(0, Math.round(+e.score || 0)),
+      role: e.role === 'SEEKER' ? 'SEEKER' : 'HIDER',
+      win: !!e.win, ts: +e.ts || Date.now(),
+    };
+    this.rows.push(row);
+    this.rows.sort(LocalScores.cmp);
+    const rank = this.rows.indexOf(row) + 1;
+    this.rows = this.rows.slice(0, this.cap);
+    this.lastRank = rank;
+    this.save();
+    return { rank, rows: this.rows, best: this.rows.length ? this.rows[0].score : 0, added: rank > 0 && rank <= this.cap, row };
+  }
+  /** n teratas (default 5 = "top 5 positions" di blueprint). */
+  top(n) { return this.rows.slice(0, Math.max(1, n === undefined ? 5 : n | 0)); }
+  best() { return this.rows.length ? this.rows[0].score : 0; }
+  clear() { this.rows = []; this.lastRank = 0; this.save(); return this; }
+  /** Tanggal pendek utk baris papan skor, mis. "1 Sep". */
+  static fmtDate(ts) {
+    try { return new Date(ts || Date.now()).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' }); }
+    catch (e) { return ''; }
+  }
+  get length() { return this.rows.length; }
 }
 /** Fallback storage (node / mode privat). */
 function makeMemoryStore() { const m = new Map(); return { getItem: k => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: k => m.delete(k) }; }
@@ -682,7 +795,7 @@ class Round {
  * BROWSER LAYER — asset, renderer, HUD, input, net client, "iklan"
  * ============================================================================= */
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { CFG, ECONOMY, Profile, Round, PlayerState, buildMap, spawnFor, PROPS, TILES, clamp, dist, fmtTime, makeMemoryStore };
+  module.exports = { CFG, ECONOMY, Profile, LocalScores, Round, PlayerState, buildMap, spawnFor, PROPS, TILES, clamp, dist, fmtTime, makeMemoryStore };
 }
 
 if (typeof document !== 'undefined') (function boot() {
@@ -793,8 +906,8 @@ if (typeof document !== 'undefined') (function boot() {
   const queryFlag = k => { try { return new URLSearchParams(location.search).get(k); } catch (e) { return null; } };
   const UI_KEY = 'hideseek_ui';
   function loadUiPrefs() {
-    try { return Object.assign({ haptics: true, lang: 'id', orient: 'any', lb: false }, JSON.parse(localStorage.getItem(UI_KEY) || '{}') || {}); }
-    catch (e) { return { haptics: true, lang: 'id', orient: 'any', lb: false }; }
+    try { return Object.assign({ haptics: true, lang: 'id', orient: 'any', lb: false, sens: 1 }, JSON.parse(localStorage.getItem(UI_KEY) || '{}') || {}); }
+    catch (e) { return { haptics: true, lang: 'id', orient: 'any', lb: false, sens: 1 }; }
   }
   const uiPrefs = loadUiPrefs();
   function saveUiPrefs() { try { localStorage.setItem(UI_KEY, JSON.stringify(uiPrefs)); } catch (e) { } }
@@ -816,6 +929,33 @@ if (typeof document !== 'undefined') (function boot() {
   const screens = UI ? new UI.Screens(SCREEN_NAMES, { getElementById: id => $(id), onChange: onScreenChange }) : null;
   let paused = false;
   const fx = UI ? new UI.Fx($('fx'), { project: (wx, wy) => ({ x: W2SX(wx) / (DPR || 1), y: W2SY(wy) / (DPR || 1) }) }) : null;
+  /* Partikel canvas (web/particles.js) — opsional; kalau scriptnya hilang game tetap jalan. */
+  const FXp = (typeof window !== 'undefined' && window.BungFX) || null;
+  const parts = FXp ? new FXp({ max: 180 }) : null;
+  let dustAt = 0;
+  /**
+   * Goyang layar singkat = padanan "camera shake saat caught" (blueprint 5.2).
+   * power 1..3 (durasinya ikut naik). Kelas `shake-N` menggerakkan #stage, jadi
+   * kanvas + HUD ikut bergoyang; dihormati juga oleh prefers-reduced-motion.
+   */
+  function shake(power) {
+    const el = $('stage'); if (!el) return;
+    if (parts && parts.reduced) return;
+    const pw = clamp(Math.round(power || 1), 1, 3);
+    el.className = ((el.className || '').replace(/\s*shake(-[123])?/g, '')) + ' shake shake-' + pw;
+    clearTimeout(shake._t);
+    shake._t = setTimeout(() => { el.className = (el.className || '').replace(/\s*shake(-[123])?/g, ''); }, 240 + pw * 70);
+  }
+  /** Debu kaki saat pemain lokal berlari (dibatasi ~7 semburan/detik). */
+  function dustStep(dt) {
+    if (!parts || !ROUND || paused) return;
+    const p = ROUND.me(); if (!p || p.ghost) return;
+    const ph = ROUND.phase; if (ph !== 'HIDE' && ph !== 'SEEK') return;
+    dustAt -= dt;
+    if (dustAt > 0 || !(p.speedNow > 1.2)) return;
+    dustAt = 0.14;
+    parts.emit('dust', p.x, p.y - 0.4, { count: 3, dir: Math.PI, spread: 0.5, speed: 0.45 + p.speedNow * 0.12 });
+  }
   if (UI && UI.Viewport) UI.Viewport.init();
   function showScreen(name) { if (screens) screens.show(name); }
   /** Musik & visibilitas joystick mengikuti layar aktif. */
@@ -909,9 +1049,12 @@ if (typeof document !== 'undefined') (function boot() {
   function renderMiniBoard() {
     const el = $('lbMini'); if (!el || !ROUND) return;
     const rows = [...ROUND.players.values()].sort((a, b) => scoreOf(b) - scoreOf(a));
+    const loc = localScores.top(5);
     el.innerHTML = rows.map((p, i) => `<tr class="${p.id === ROUND.myId ? 'me' : ''}"><td>${i + 1}</td><td>${p.name}</td>` +
       `<td>${p.ghost ? '👻' : (p.isHider ? '🦎' : '👁')}${p.isHider ? ' ' + p.hp + 'HP' : ' ' + p.catches + '✋'}</td>` +
-      `<td><b>${scoreOf(p)}</b></td></tr>`).join('');
+      `<td><b>${scoreOf(p)}</b></td></tr>`).join('') +
+      (loc.length ? `<tr class="sep"><td colspan="4">rekor lokal · top ${loc.length}</td></tr>` +
+        loc.map((x, i) => `<tr class="dim"><td>${i + 1}</td><td>${x.name}</td><td>${x.win ? '🏆' : (x.role === 'HIDER' ? '🦎' : '👁')}</td><td><b>${x.score}</b></td></tr>`).join('') : '');
   }
   function scoreOf(p) {
     if (!p) return 0;
@@ -1035,6 +1178,8 @@ if (typeof document !== 'undefined') (function boot() {
         for (let i = 0; i < p.hp; i++) ctx.fillRect(sx - 9 * DPR + i * 7 * DPR, sy - size * .5 - 4 * DPR, 5 * DPR, 3 * DPR);
       }
     }
+    // partikel FX (debu/burst/sparkle/cincin) -- digambar paling atas, sebelum minimap
+    if (parts) parts.draw(ctx, W2SX, W2SY, scale);
     // radar ping di minimap digambar di drawMinimap
     drawMinimap();
   }
@@ -1093,7 +1238,7 @@ if (typeof document !== 'undefined') (function boot() {
     if (joy.active) { dx = joy.dx; dy = joy.dy; }
     p.input.dx = dx; p.input.dy = dy;
   }
-  const joy = { active: false, dx: 0, dy: 0, id: null, cx: 0, cy: 0 };
+  const joy = { active: false, dx: 0, dy: 0, id: null, cx: 0, cy: 0, sens: clamp(Number(uiPrefs.sens) || 1, 0.7, 1.5) };
   (function setupJoy() {
     const el = $('joy'), knob = $('joyKnob');
     const R = () => el.clientWidth / 2;
@@ -1101,7 +1246,7 @@ if (typeof document !== 'undefined') (function boot() {
       const r = el.getBoundingClientRect();
       let vx = e.clientX - (r.left + r.width / 2), vy = e.clientY - (r.top + r.height / 2);
       // deadzone + vektor ternormalisasi dari uiKit (sama seperti hud-gamepad)
-      const v = UI ? UI.Joystick.computeVector(e.clientX, e.clientY, r, 0.14)
+      const v = UI ? UI.Joystick.computeVector(e.clientX, e.clientY, r, 0.14, joy.sens)
         : (() => { const m = Math.hypot(vx, vy) || 1, lim = Math.max(1, r.width / 2), k = Math.min(1, m / lim); return { dx: vx / m * k, dy: -vy / m * k, mag: m }; })();
       joy.dx = v.dx; joy.dy = v.dy;
       const lim = r.width / 2, ang = Math.atan2(vy, vx), rr = Math.min(1, v.mag || 0) * lim * 0.5;
@@ -1134,6 +1279,8 @@ if (typeof document !== 'undefined') (function boot() {
    * META — AdsManager (AppLixir/AdinPlay/simulasi) + ReferralSystem + profil
    * ========================================================================== */
   const profile = new Profile(typeof localStorage !== 'undefined' ? localStorage : null, globalCfg('economy') || {});
+  /** Top-10 skor lokal (localStorage['hideseek_scores']) — lihat kelas LocalScores di atas. */
+  const localScores = new LocalScores(profile.storage, profile.cfg);
   let metaPaused = false;                        // True selama iklan tayang -> step() ditahan
   /** Facade "player" sesuai contoh di integration-guide.md. */
   const playerAPI = {
@@ -1156,6 +1303,8 @@ if (typeof document !== 'undefined') (function boot() {
     ui: {
       get screens() { return screens; }, get fx() { return fx; }, get UI() { return UI; }, get audio() { return AU; },
       get paused() { return paused; }, setPaused, toggleSound, toggleBoard, showScreen, renderMiniBoard,
+      get parts() { return parts; }, get localScores() { return localScores; }, get profile() { return profile; },
+      shake, renderLocalBoard,
       prefs: uiPrefs, savePrefs: saveUiPrefs,
     },
   };
@@ -1237,7 +1386,7 @@ if (typeof document !== 'undefined') (function boot() {
   /* ----- HUD meta: koin, nyawa cadangan, tombol iklan & undang teman ----- */
   function updateUI() {
     const txt = (id, v) => { const el = $(id); if (el) el.textContent = v; };
-    txt('coins', '🪙 ' + profile.coins); txt('lives', '💚 ×' + profile.lives);
+    txt('coins', String(profile.coins)); txt('lives', '×' + profile.lives);
     txt('coinsLobby', profile.coins); txt('livesLobby', profile.lives);
     txt('maxhpTag', 'MAX HP ' + profile.maxHp);
     const c = profile.coins;
@@ -1247,8 +1396,10 @@ if (typeof document !== 'undefined') (function boot() {
     $('buyLifeBtn').disabled = c < profile.cfg.lifePrice;
     $('adLifeBtn').disabled = adBusy; $('adCoinsBtn').disabled = adBusy; $('inviteBtn').disabled = !referral;
     // menu utama: ringkasan progres (biar "state selalu terlihat" juga di luar ronde)
-    setTxt('coinsMenu', '🪙 ' + profile.coins);
-    setTxt('bestTag', 'rekor: ' + profile.best + ' · ronde: ' + profile.rounds);
+    setTxt('coinsMenu', String(profile.coins));
+    // "state selalu terlihat" (blueprint 1.1): level + progres XP ikut di menu
+    const lp = profile.levelProgress;
+    setTxt('bestTag', 'Lv ' + lp.level + ' · ' + lp.pct + '% · rekor ' + profile.best + ' · ronde ' + profile.rounds);
     const sb = $('soundBtn');
     if (sb) { const muted = AU && AU.prefs && (!AU.prefs.sfx && !AU.prefs.music); sb.className = 'iconbtn' + (muted ? ' off' : ''); sb.setAttribute('aria-pressed', muted ? 'false' : 'true'); }
     if (ROUND) hud();
@@ -1330,6 +1481,27 @@ if (typeof document !== 'undefined') (function boot() {
     } catch (e) { }
   });
   bindSwitch('hapticSwitch', () => uiPrefs.haptics !== false, v => { uiPrefs.haptics = v; if (UI && UI.Haptics) UI.Haptics.enabled = v; saveUiPrefs(); if (v) haptic('tap'); });
+  /* Sensitivitas joystick (blueprint 4.4 Settings): 70%..150%, disimpan di hideseek_ui. */
+  (function bindSens() {
+    const r = $('sensRange'); if (!r) return;
+    const lab = $('sensVal');
+    const put = v => { if (lab) lab.textContent = Math.round(v * 100) + '%'; joy.sens = v; };
+    const v0 = clamp(Number(uiPrefs.sens) || 1, 0.7, 1.5);
+    r.value = String(Math.round(v0 * 100)); put(v0);
+    const on = () => {
+      const v = clamp((Number(r.value) || 100) / 100, 0.7, 1.5);
+      if (v === uiPrefs.sens) return;
+      uiPrefs.sens = v; saveUiPrefs(); put(v);
+    };
+    r.oninput = r.onchange = on;
+  })();
+  onClick('clearLbBtn', () => {
+    const n = localScores.length; localScores.clear();
+    const lbo = $('lbOverlay'); if (lbo && lbo.className === 'on') renderMiniBoard();
+    renderLocalBoard(0);                    // layar hasil ikut disinkronkan (wrapper -> off)
+    toast(n ? 'rekor lokal dihapus (' + n + ' baris)' : 'belum ada rekor lokal');
+    sfx('err');
+  });
   (function bindVolume() {
     const r = $('volumeRange'); if (!r) return;
     r.value = String(Math.round(((AU && AU.prefs.volume) || 0.8) * 100));
@@ -1366,6 +1538,7 @@ if (typeof document !== 'undefined') (function boot() {
     if (paused) { if (ROUND) draw(); return requestAnimationFrame(frame); }   // menu jeda -> bekukan simulasi
     if (ROUND && netMode !== 'client') { keyInput(); ROUND.step(dt); }
     else if (ROUND) { keyInput(); ROUND.t += dt; ROUND.tickPhaseClient?.(); }
+    if (parts) { parts.step(dt); dustStep(dt); }
     if (ROUND) { buildSkills(); hud(); draw(); }
     requestAnimationFrame(frame);
   }
@@ -1398,16 +1571,23 @@ if (typeof document !== 'undefined') (function boot() {
     let lastPhase = '';
     ROUND.on(e => {
       if (e.type === 'result') {
-        showResult(e.results);
         const me = ROUND.me();
+        let prog = null;
         if (me) {
-          const gained = profile.finishRound(me.score | 0);
+          const win = isOnMySide(e.results);
+          const gained = profile.finishRound(me.score | 0);              // koin: aturan lama (0.5/skor)
+          const xp = profile.awardProgress(me.score | 0, win);            // XP utk layar Game Over
+          const local = localScores.add({ name: me.name, score: me.score | 0, role: me.isHider ? 'HIDER' : 'SEEKER', win });
+          prog = { gained, xp: xp.gained, leveledTo: xp.leveledTo, level: xp.level, progress: xp.progress, local };
           if (gained > 0) {
             toast(`🪙 +${gained} koin (skor ${me.score})`, 3200); sfx('coin');
             if (fx) fx.damage(me.x, me.y, '+' + gained + ' 🪙', 'coin');
+            if (parts) parts.emit('spark', me.x, me.y, { count: 12 });
           }
+          if (xp.leveledTo) { toast('⬆ NAIK LEVEL → Lv ' + xp.leveledTo, 3600); sfx('reward'); haptic('win'); shake(1); }
           updateUI();
         }
+        showResult(e.results, prog);
       }
       // Nyawa cadangan hasil iklan/referral dipakai otomatis sebelum jadi hantu.
       if (e.type === 'ghost' && e.id === ROUND.myId && profile.lives > 0 && (ROUND.phase === 'HIDE' || ROUND.phase === 'SEEK')) {
@@ -1426,17 +1606,28 @@ if (typeof document !== 'undefined') (function boot() {
         case 'hit':
           sfx('hit'); haptic('catchHit');
           if (fx && at) fx.damage(at.x, at.y, '-1 ♥', '');
-          if (e.id === ROUND.myId && fx) fx.flash($('stage'), 'hit');
+          if (at && parts) parts.emit('hit', at.x, at.y, { count: e.id === ROUND.myId ? 16 : 10 });
+          if (e.id === ROUND.myId) { if (fx) fx.flash($('stage'), 'hit'); shake(2); }
           break;
-        case 'blast': sfx('blast'); haptic('hit'); break;
-        case 'radar': sfx('radar'); break;
-        case 'prop': sfx('swap'); if (fx && at) fx.damage(at.x, at.y, 'prop!', 'info'); break;
+        case 'blast':
+          sfx('blast'); haptic('hit');
+          if (parts) parts.emit('ring', e.x || 0, e.y || 0, { r1: CFG.blastRadius });
+          shake(1); break;
+        case 'radar': sfx('radar'); if (at && parts) parts.emit('ring', at.x, at.y, { r1: 3.2, color: 'rgba(255,120,120,A)' }); break;
+        case 'prop': sfx('swap'); if (fx && at) fx.damage(at.x, at.y, 'prop!', 'info');
+          if (at && parts) parts.emit('dust', at.x, at.y - 0.3, { count: 6, spread: 1 }); break;
         case 'propCancel': sfx('skill'); break;
-        case 'camo': sfx('camo'); if (fx && at) fx.damage(at.x, at.y, 'camo', 'info'); if (e.id === ROUND.myId && fx) fx.flash($('stage'), 'camo'); break;
-        case 'ghost': sfx('ghost'); haptic('lose'); if (fx && at) fx.damage(at.x, at.y, '💀', ''); break;
-        case 'revive': sfx('reward'); if (fx && at) fx.damage(at.x, at.y, '+1 ♥', 'heal'); break;
-        case 'slow': sfx('hit', 0.6); break;
-        case 'frenzy': sfx('go'); if (fx && at) fx.damage(at.x, at.y, 'FRENZY', 'coin'); break;
+        case 'camo': sfx('camo'); if (fx && at) fx.damage(at.x, at.y, 'camo', 'info');
+          if (at && parts) parts.emit('camo', at.x, at.y);
+          if (e.id === ROUND.myId && fx) fx.flash($('stage'), 'camo'); break;
+        case 'ghost': sfx('ghost'); haptic('lose'); if (fx && at) fx.damage(at.x, at.y, '💀', '');
+          if (at && parts) parts.emit('hit', at.x, at.y, { count: 18, color: 'rgba(190,190,215,A)' });
+          if (e.id === ROUND.myId) shake(3); break;
+        case 'revive': sfx('reward'); if (fx && at) fx.damage(at.x, at.y, '+1 ♥', 'heal');
+          if (at && parts) parts.emit('heal', at.x, at.y); break;
+        case 'slow': sfx('hit', 0.6); if (at && parts) parts.emit('dust', at.x, at.y - 0.3, { count: 4, color: 'rgba(140,210,255,A)' }); break;
+        case 'frenzy': sfx('go'); if (fx && at) fx.damage(at.x, at.y, 'FRENZY', 'coin');
+          if (at && parts) parts.emit('spark', at.x, at.y, { count: 12 }); break;
       }
       if (e.type === 'phase' && (e.name === 'HIDE' || e.name === 'SEEK')) sfx('go');
     });
@@ -1464,7 +1655,23 @@ if (typeof document !== 'undefined') (function boot() {
     if (!me) return !!r && r.hidersWin;
     return r.hidersWin ? me.role === 'HIDER' : me.role === 'SEEKER';
   }
-  function showResult(r) {
+  /**
+   * Layar hasil. `prog` (opsional) = {gained, xp, leveledTo, progress, local}
+   * dari handler 'result'; kalau tidak ada (mis. ronde client-only) display
+   * tetap jalan dengan placeholder.
+   */
+  /**
+   * Baris "papan skor lokal" di layar hasil + status wrapper-nya. Dipisahkan supaya
+   * tombol hapus di Settings bisa menyegarkan tampilan tanpa harus menunggu ronde baru.
+   */
+  function renderLocalBoard(mineTs) {
+    const el = $('localLbBody');
+    if (el) el.innerHTML = localScores.top(5).map((x, i) =>
+      `<tr class="${x.ts && x.ts === mineTs ? 'me' : ''}"><td>${i + 1}</td><td>${x.name}</td>` +
+      `<td>${x.win ? '🏆' : (x.role === 'HIDER' ? '🦎' : '👁')}</td><td><b>${x.score}</b></td><td>${LocalScores.fmtDate(x.ts)}</td></tr>`).join('');
+    const lw = $('localLbWrap'); if (lw) lw.className = localScores.length ? 'on' : '';
+  }
+  function showResult(r, prog) {
     $('result').className = 'panel';
     const win = isOnMySide(r);
     $('resultTitle').textContent = r.hidersWin ? 'HIDERS MENANG' : 'SEEKER MENANG';
@@ -1479,11 +1686,28 @@ if (typeof document !== 'undefined') (function boot() {
       : `Semua hider tertangkap (${r.totalCaught}) oleh ${name(ROUND.seekerId)}.`;
     $('lbBody').innerHTML = r.board.map((b, i) =>
       `<tr class="${b.me ? 'me' : ''}"><td>${i + 1}</td><td>${b.name}</td><td>${b.role}</td><td>${b.detail}</td><td><b>${b.score}</b></td></tr>`).join('');
+    /* --- rank + XP + papan skor lokal (blueprint 4.1 "Game Over: skor, #rank, XP earned") --- */
+    const setHtml = (id, h) => { const el = $(id); if (el) el.innerHTML = h; };
+    const board = r.board || [];
+    const meRow = board.find(b => b.me);
+    const rank = meRow ? board.indexOf(meRow) + 1 : 0;
+    const lp = (prog && prog.progress) || profile.levelProgress;
+    const isRecord = !!meRow && meRow.score > 0 && meRow.score >= profile.best;
+    setTxt('rankTag', rank ? ('#' + rank + ' dari ' + board.length + (isRecord ? ' · REKOR BARU' : '')) : '—');
+    setTxt('xpGain', '+' + ((prog && prog.xp) || 0) + ' XP');
+    setTxt('lvlTag', 'Lv ' + lp.level + ' · ' + lp.pct + '%');
+    const bf = $('lvlBarFill'); if (bf && bf.style) bf.style.width = clamp(lp.pct, 0, 100) + '%';
+    setTxt('coinGain', '+' + ((prog && prog.gained) || 0) + ' koin');
+    if (prog && prog.leveledTo) { setCls('lvlTag', 'lvl up'); toast('⬆ level ' + prog.leveledTo, 3000); }
+    else setCls('lvlTag', 'lvl');
+    renderLocalBoard(prog && prog.local && prog.local.row ? prog.local.row.ts : 0);
     let left = CFG.result;
     clearInterval(showResult._iv);
     $('nextRoundIn').textContent = 'ronde berikutnya dalam ' + left.toFixed(0) + 's';
     showResult._iv = setInterval(() => {
-      left -= 0.5; $('nextRoundIn').textContent = left > 0 ? 'ronde berikutnya dalam ' + left.toFixed(0) + 's' : 'mulai…';
+      left -= 0.5;
+      if (left <= 0) { clearInterval(showResult._iv); $('nextRoundIn').textContent = 'mulai…'; return; }
+      $('nextRoundIn').textContent = 'ronde berikutnya dalam ' + left.toFixed(0) + 's';
     }, 500);
   }
 

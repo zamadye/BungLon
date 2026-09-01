@@ -38,12 +38,15 @@ const Haptics = {
 class Joystick {
   /**
    * @param {Element|null} el  elemen pad (ukuran dari CSS)
-   * @param {object} opt {knob, deadzone=0.16, onChange(dx,dy,active), onTap()}
+   * @param {object} opt {knob, deadzone=0.16, sensitivity=1, onChange(dx,dy,active), onTap()}
+   *   sensitivity (0.7..1.5) = "seberapa cepat joystick mencapai kecepatan penuh":
+   *   makin besar, makin sedikit jari harus digeser untuk sampai ke vektor 1.0.
    */
   constructor(el, opt = {}) {
     this.el = el || null;
     this.knob = opt.knob || null;
     this.deadzone = opt.deadzone === undefined ? 0.16 : opt.deadzone;
+    this.sensitivity = clamp(Number(opt.sensitivity) || 1, 0.5, 2);
     this.onChange = opt.onChange || (() => {});
     this.dx = 0; this.dy = 0; this.active = false; this.pointerId = null;
     this._handlers = [];
@@ -53,13 +56,14 @@ class Joystick {
    * Inti matematika: posisi jari + rect pad -> vektor gerak (murni, bisa diuji).
    * @returns {{dx:number,dy:number,mag:number,active:boolean}}
    */
-  static computeVector(clientX, clientY, rect, deadzone = 0.16) {
+  static computeVector(clientX, clientY, rect, deadzone = 0.16, sensitivity = 1) {
     const cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2;
     const vx = clientX - cx, vy = clientY - cy;
     const lim = Math.max(1, Math.min(rect.width, rect.height) / 2);
     const m = Math.hypot(vx, vy) || 1;
     const mag = clamp(m / lim, 0, 1);
-    const out = clamp((mag - deadzone) / (1 - deadzone), 0, 1);      // remap deadzone -> 0..1
+    const sens = clamp(Number(sensitivity) || 1, 0.5, 2);            // blueprint: slider sensitivitas
+    const out = clamp((mag - deadzone) / (1 - deadzone) * sens, 0, 1);   // remap deadzone -> 0..1
     return { dx: (vx / m) * out, dy: -(vy / m) * out, mag, active: out > 0 };
   }
   _setKnob(vx, vy, lim) {
@@ -90,7 +94,7 @@ class Joystick {
   _move(e) {
     const rect = this.el.getBoundingClientRect();
     const lim = Math.max(1, Math.min(rect.width, rect.height) / 2);
-    const v = Joystick.computeVector(e.clientX, e.clientY, rect, this.deadzone);
+    const v = Joystick.computeVector(e.clientX, e.clientY, rect, this.deadzone, this.sensitivity);
     this.dx = v.dx; this.dy = v.dy;
     const ang = Math.atan2(e.clientY - (rect.top + rect.height / 2), e.clientX - (rect.left + rect.width / 2));
     const r = Math.min(v.mag, 1) * lim * 0.5;

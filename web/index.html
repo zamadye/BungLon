@@ -56,8 +56,8 @@
 
     <!-- META: ekonomi + iklan + undang (di bawah timer, kiri) -->
     <div id="metaBar">
-      <span class="pill gold" id="coins">🪙 0</span>
-      <span class="pill" id="lives">💚 ×0</span>
+      <span class="pill gold"><img class="ico" src="assets/Icon_Coin.png" alt="koin" onerror="this.remove()"><b id="coins">0</b></span>
+      <span class="pill"><img class="ico" src="assets/Icon_Life.png" alt="nyawa" onerror="this.remove()"><b id="lives">×0</b></span>
       <span class="pill dim" id="maxhpTag">MAX HP 3</span>
     </div>
 
@@ -93,6 +93,7 @@
 
   <!-- ============================ SPLASH ============================ -->
   <div id="splash" class="screen on">
+    <div class="bgimg" aria-hidden="true"></div><div class="shade" aria-hidden="true"></div>
     <img class="lizard" src="assets/Chameleon_Hider.png" alt="" onerror="this.style.display='none'">
     <h1 class="logo">BUNGLON!<small>sembunyi jadi barang</small></h1>
     <div id="splashBarWrap"><div id="splashBar"></div></div>
@@ -103,6 +104,7 @@
 
   <!-- ============================ MAIN MENU ============================ -->
   <div id="menu" class="screen">
+    <div class="bgimg" aria-hidden="true"></div>
     <div class="card">
       <img class="logo" id="logoImg" src="assets/Logo_HideSeek.png" alt="BUNGLON"
            style="max-width:min(360px,80vw);width:100%;border-radius:18px" onerror="this.style.display='none'">
@@ -115,7 +117,7 @@
       </div>
       <div class="row">
         <span class="pill dim" id="bestTag">rekor: 0</span>
-        <span class="pill gold" id="coinsMenu">🪙 0</span>
+        <span class="pill gold"><img class="ico" src="assets/Icon_Coin.png" alt="koin" onerror="this.remove()"><b id="coinsMenu">0</b></span>
         <span class="pill dim" id="verTag">v2 UI · web demo</span>
       </div>
     </div>
@@ -165,8 +167,19 @@
       <h1 id="resultTitle">HIDERS MENANG</h1>
       <div class="mvp" id="mvpTag"><span class="crown">👑</span><span id="mvpName">—</span></div>
       <div id="resultDetail" class="note"></div>
+      <div id="rankRow">
+        <span class="pill rank" id="rankTag">#—</span>
+        <span class="pill gold"><img class="ico" src="assets/Icon_Coin.png" alt="" onerror="this.remove()"><b id="coinGain">+0 koin</b></span>
+        <span class="pill xp"><b id="xpGain">+0 XP</b></span>
+        <span class="lvlbox"><i id="lvlTag" class="lvl">Lv 1</i><span class="bar"><i id="lvlBarFill"></i></span></span>
+      </div>
       <table><thead><tr><th>#</th><th>Pemain</th><th>Role</th><th>Detail</th><th>Poin</th></tr></thead>
         <tbody id="lbBody"></tbody></table>
+      <div id="localLbWrap">
+        <div class="note lbHead">🏅 Papan skor lokal — top 5, tersimpan di perangkat</div>
+        <table><thead><tr><th>#</th><th>Nama</th><th></th><th>Poin</th><th>Tgl</th></tr></thead>
+          <tbody id="localLbBody"></tbody></table>
+      </div>
       <div class="row">
         <button class="btn gold" id="againBtn">RONDE BERIKUTNYA</button>
         <button class="btn ghost" id="lobbyBtn">KE LOBBY</button>
@@ -200,6 +213,9 @@
       <div class="switch" id="vibrateInfo" style="cursor:default"><span>Volume</span>
         <input type="range" id="volumeRange" min="0" max="100" step="5" value="80" style="width:120px;padding:0">
       </div>
+      <div class="switch" style="cursor:default"><span>Sensitivitas joystick</span>
+        <span class="sens"><input type="range" id="sensRange" min="70" max="150" step="10" value="100" style="width:110px;padding:0"><b id="sensVal">100%</b></span>
+      </div>
       <div class="switch" style="cursor:default"><span>Orientasi</span>
         <select id="orientSel" style="min-height:36px;padding:6px 8px">
           <option value="any">otomatis</option><option value="portrait">portrait</option><option value="landscape">landscape</option>
@@ -209,7 +225,8 @@
         <select id="langSel" style="min-height:36px;padding:6px 8px"><option value="id">Indonesia</option><option value="en">English</option></select>
       </div>
       <p class="note" id="deviceInfo">—</p>
-      <div class="row"><button class="btn" id="closeSettingsBtn">SELESAI</button></div>
+      <div class="row"><button class="btn" id="closeSettingsBtn">SELESAI</button>
+        <button class="btn ghost" id="clearLbBtn">🗑 Hapus rekor lokal</button></div>
     </div>
   </div>
 
@@ -242,6 +259,7 @@
 <!-- UI kit + audio (vanilla, tanpa dependency) -->
 <script src="uiKit.js"></script>
 <script src="audioKit.js"></script>
+<script src="particles.js"></script>
 <!-- sistem iklan + referral -->
 <script src="adsManager.js"></script>
 <script src="referralSystem.js"></script>

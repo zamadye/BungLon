@@ -89,7 +89,12 @@ function miniDoc() {
     ok(' overlap dihindari di 375px (#hint disembunyikan <400px)', /@media \(max-width:400px\)[\s\S]*#hint\{display:none\}/.test(css));
     ok('prefers-reduced-motion dihormati', /@media \(prefers-reduced-motion:reduce\)/.test(css));
     ok('prefers-contrast & focus-visible ada (aksesibilitas)', /prefers-contrast/.test(css) && /:focus-visible/.test(css));
-    ok('!important hanya utk reduced-motion', (css.match(/!important/g) || []).length <= 2, (css.match(/!important/g) || []).length);
+    {   // !important boleh ada, tapi HANYA di blok reduced-motion (override animasi)
+      const at = css.indexOf('@media (prefers-reduced-motion');
+      const tot = (css.match(/!important/g) || []).length;
+      const inRm = at >= 0 ? (css.slice(at).match(/!important/g) || []).length : -1;
+      ok('!important hanya dipakai di blok prefers-reduced-motion', at >= 0 && tot > 0 && tot === inRm, [tot, inRm]);
+    }
 
     /* layar wajib (blueprint 4.1) */
     const screens = { splash: 'splash', 'main menu': 'menu', lobby: 'lobby', 'gameplay HUD': 'hud', 'pause menu': 'pausePanel', 'game over': 'result', settings: 'settingsPanel', 'how to play': 'howtoPanel' };
@@ -309,10 +314,138 @@ function miniDoc() {
     ok('relay /room/ TIDAK pernah di-cache', /\/room\//.test(sw) && /return;\s*\/\/\s*relay/.test(sw.replace(/\s+/g, ' ')) || /pathname\.indexOf\('\/room\/'\)/.test(sw));
     ok('navigasi network-first dengan fallback index.html', /mode === 'navigate'/.test(sw) && /caches\.match\('\.\/index\.html'\)/.test(sw));
     ok('aset memakai stale-while-revalidate', /stale-while-revalidate|cache\.match\(req\)[\s\S]*fetch\(req\)/.test(sw));
-    ok('cache dibersihkan saat versi naik', /caches\.delete\(k\)/.test(sw) && /VERSION = 'v2-ui-1'/.test(sw));
+    ok('cache dibersihkan saat versi naik', /caches\.delete\(k\)/.test(sw) && /const VERSION = 'v\d[^']*'/.test(sw) && /CACHE_SHELL = '[^']+?' \+ VERSION/.test(sw));
     ok('skipWaiting tersedia (tombol update)', /skipWaiting/.test(sw));
     ok('SW didaftarkan di index.html dengan opt-out ?nosw=1', /serviceWorker\.register\('sw\.js'\)/.test(html) && /nosw=1/.test(html));
     ok('SW tidak didaftarkan di file:// (guard protokol http)', /location\.protocol\.indexOf\('http'\) === 0/.test(html));
+  }
+
+
+  /* ============ [E] UI v2.1: XP/level, partikel, sensitivitas, papan skor lokal ============ */
+  console.log('\n[E] XP + partikel + sensitivitas joystick + leaderboard lokal + aset UI');
+  {
+    const G = require(WEB('game.js'));
+    const { Particles } = require(WEB('particles.js'));
+    const swTxt = rd('sw.js');
+    const shellList = JSON.parse('[' + (swTxt.match(/const SHELL = \[([\s\S]*?)\];/) || [, ''])[1]
+      .replace(/\/\/[^\n]*/g, '').replace(/'/g, '"').replace(/,(\s*[}\]])/g, '$1').replace(/,\s*$/, '') + ']');
+    const { Profile, LocalScores, makeMemoryStore, ECONOMY } = G;
+
+    /* ---- 1) XP & level (blueprint 4.1: Game Over menampilkan "XP earned") ---- */
+    ok('ECONOMY punya konstanta XP (web-only)', ECONOMY.xpPerScore > 0 && ECONOMY.xpWin > 0 && ECONOMY.xpPlay >= 0 && ECONOMY.levelBase > 0);
+    const st = makeMemoryStore();
+    const pr = new Profile(st);
+    ok('profil baru: xp 0 + level 1', pr.xp === 0 && pr.level === 1, [pr.xp, pr.level]);
+    ok('XP ronde = round(120*0.6)+120menang+25main = 217', pr.awardProgress(120, true).gained === 217, pr.xp);
+    ok('koin TIDAK disentuh awardProgress (aturan lama utuh)', pr.coins === 0, pr.coins);
+    ok('finishRound lama tetap 0.5 koin / skor', new Profile(makeMemoryStore()).finishRound(61) === 31);
+    ok('xp tersimpan di hideseek_profile & dibaca ulang', /"xp":217/.test(st.getItem('hideseek_profile')) && new Profile(st).xp === 217);
+    ok('kurva level 0/300/900/1800', [1, 2, 3, 4].map(L => Profile.xpForLevel(L)).join(',') === '0,300,900,1800');
+    ok('levelOf(xpForLevel(L)) == L (L=1,2,3,5,8,12)', [1, 2, 3, 5, 8, 12].every(L => Profile.levelOf(Profile.xpForLevel(L)) === L));
+    ok('XP 3000 -> baru saja Lv 5 (pct 0, perlu 1500 utk Lv 6)', (function () { const q = new Profile(makeMemoryStore()); q.addXp(3000); const lp = q.levelProgress; return q.level === 5 && lp.pct === 0 && lp.need === 1500; })(), new Profile(makeMemoryStore()).levelProgress);
+    ok('XP 1799 masih Lv 3 (tepat di bawah ambang)', (function () { const q = new Profile(makeMemoryStore()); q.addXp(1799); return q.level === 3 && q.levelProgress.pct >= 99; })(), (function () { const q = new Profile(makeMemoryStore()); q.addXp(1799); return [q.level, q.levelProgress.pct]; })());
+    ok('leveledTo terisi saat naik, 0 bila level tetap', (function () { const q = new Profile(makeMemoryStore()); const a = q.awardProgress(500, true), b = q.awardProgress(0, false); return a.leveledTo >= 2 && b.leveledTo === 0; })());
+    ok('addXp(n) menolak negatif (xp tidak pernah turun)', (function () { const q = new Profile(makeMemoryStore()); q.addXp(500); q.addXp(-900); return q.xp === 500; })());
+    ok('reset() ikut menghapus xp', (function () { const q = new Profile(st); q.reset(); return q.xp === 0; })());
+    ok('layar hasil punya #rankTag/#xpGain/#lvlTag/#lvlBarFill/#coinGain', ['#rankTag', '#xpGain', '#lvlTag', '#lvlBarFill', '#coinGain'].every(id => html.indexOf('id="' + id.slice(1) + '"') >= 0), ['#rankTag'].filter(id => html.indexOf('id="' + id.slice(1) + '"') < 0));
+    ok('game.js: rank + XP dirender & ditulis ke #rankRow', /setTxt\('rankTag'/.test(gameJs) && /setTxt\('xpGain'/.test(gameJs) && /setTxt\('lvlTag'/.test(gameJs) && /id="rankRow"/.test(html));
+    ok('game.js: level ikut tampil di menu (state terlihat)', /'Lv ' \+ lp\.level/.test(gameJs));
+
+    /* ---- 2) partikel canvas + screen shake (blueprint 5.2) ---- */
+    ok('particles.js dimuat sebelum game.js + mengekspor Particles', /<script src="particles\.js"><\/script>/.test(html) && html.indexOf('particles.js') < html.indexOf('game.js') && typeof Particles === 'function');
+    const P = new Particles({ max: 40 });
+    ok('emit() menambah partikel sesuai count', P.emit('hit', 0, 0, { count: 12 }) === 12 && P.count === 12, P.count);
+    ok('semua resep KINDS punya count/life/speed', ['dust', 'spark', 'hit', 'heal', 'camo', 'ring'].every(k => Particles.KINDS[k] && Particles.KINDS[k].count > 0 && Particles.KINDS[k].life > 0));
+    ok('kind tak dikenal -> 0 (typo tertangkap, tidak crash)', P.emit('ledakan', 0, 0) === 0);
+    P.clear();
+    ok('clear() mengosongkan pool', P.count === 0);
+    P.emit('dust', 1, 1, { count: 3 });
+    ok('dust: 3 butir, y di bawah pemain, alpha placeholder utuh', P.count === 3 && P.list.every(q => /rgba\([\d.,]+,A\)$/.test(q.color)), P.count);
+    for (let i = 0; i < 20; i++) P.emit('spark', i, 0, { count: 9 });
+    ok('pool dibatasi max (yang tertua dibuang, bukan ditolak)', P.count <= 40 && P.list[P.list.length - 1].kind === 'spark', P.count);
+    ok('stepList(): gravitasi positif menurunkan vy, drag melunakkan vx', (function () {
+      const one = { kind: 'dust', x: 0, y: 0, vx: 4, vy: 0, grav: 10, drag: 1, ttl: 5, t: 0, size: 0.1, color: 'rgba(0,0,0,A)' };
+      Particles.stepList([one], 0.1);
+      return one.vy < 0 && one.y < 0 && one.x > 0 && one.vx < 4 && one.vx > 0;
+    })());
+    ok('stepList(): tanpa gravitasi -> bergerak lurus (debu tetap nyaris datar)', (function () {
+      const one = { kind: 'dust', x: 0, y: 0, vx: 1, vy: 0, grav: 0, drag: 0, ttl: 5, t: 0, size: 0.1, color: 'rgba(0,0,0,A)' };
+      Particles.stepList([one], 0.1);
+      return one.vy === 0 && Math.abs(one.y) < 1e-9;
+    })());
+    ok('step(): partikel hasil emit bergerak lalu habis sendiri', (function () {
+      const A = new Particles({}); A.emit('hit', 0, 0, { count: 6 });
+      const b = A.list[0], bx = b.x, by = b.y; A.step(0.05);
+      const moved = b.x !== bx || b.y !== by;
+      for (let i = 0; i < 80 && A.count; i++) A.step(0.05);
+      return moved && A.count === 0;
+    })());
+    ok('step(): partikel kedaluwarsa dibuang (pool kembali kosong)', (function () { for (let i = 0; i < 60 && P.count; i++) P.step(0.05); return P.count === 0; })(), P.count);
+    ok('stepList(dt) di-cap 0.05s (anti spiral-of-death saat tab back)', (function () { const r = new Particles({}); r.emit('spark', 0, 0, { count: 1 }); const one = r.list[0]; r.step(10); return one.t <= 0.050001; })());
+    const RR = new Particles({}); RR.emit('ring', 2, 3, { r1: 5 });
+    ok('ring: 1 partikel, r0<r1, tidak jatuh', RR.count === 1 && RR.list[0].r1 > RR.list[0].r0 && (RR.step(0.05), RR.list[0].y === 3));
+    let touched = 0;
+    const ctx = { save() { touched++; }, restore() { touched++; }, beginPath() { touched++; }, arc() { touched++; }, stroke() { touched++; }, fillRect() { touched++; }, set fillStyle(v) { if (/^rgba\(/.test(v)) touched++; }, set strokeStyle(v) { if (/^rgba\(/.test(v)) touched++; }, lineWidth: 1 };
+    const P2 = new Particles({}); P2.emit('hit', 1, 1, { count: 5 }); P2.emit('ring', 1, 1, {});
+    ok('draw(ctx, sx, sy, unit) menggambar semua partikel & mengembalikan jumlah', P2.draw(ctx, v => v * 10, v => 400 - v * 10, 10) === 6 && touched > 6, touched);
+    ok('draw() tanpa ctx / kosong -> 0 (tidak melempar)', P2.draw(null, null, null, 1) === 0 && new Particles({}).draw(ctx, v => v, v => v, 1) === 0);
+    ok('prefers-reduced-motion -> emit() diam total', new Particles({ reduced: true }).emit('hit', 0, 0, { count: 12 }) === 0);
+    ok('alpha placeholder diganti saat draw (tidak ada "A)" bocor)', (function () { let bad = 0; const c2 = { save() { }, restore() { }, beginPath() { }, arc() { }, stroke() { }, fillRect() { }, set fillStyle(v) { if (/A\)/.test(v)) bad++; }, set strokeStyle(v) { if (/A\)/.test(v)) bad++; }, lineWidth: 1 }; P2.draw(c2, v => v, v => v, 1); return bad === 0; })());
+    ok('game.js: step+draw partikel tersambung ke loop render', /parts\.step\(dt\); dustStep\(dt\)/.test(gameJs) && /parts\.draw\(ctx, W2SX, W2SY, scale\)/.test(gameJs));
+    ok('game.js: debu saat lari, burst saat kena, sparkle saat koin', /parts\.emit\('dust'/.test(gameJs) && /parts\.emit\('hit'/.test(gameJs) && /parts\.emit\('spark'/.test(gameJs) && /parts\.emit\('ring'/.test(gameJs) && /parts\.emit\('heal'/.test(gameJs) && /parts\.emit\('camo'/.test(gameJs));
+    ok('game.js: screen shake utk hit/ghost/level-up', /shake\(2\)/.test(gameJs) && /shake\(3\)/.test(gameJs) && /shake\(1\)/.test(gameJs));
+    ok('CSS: keyframes stageShake + 3 intensitas', /@keyframes stageShake/.test(css) && /#stage\.shake-1\{--shk:2px\}/.test(css) && /#stage\.shake-3\{--shk:7px\}/.test(css));
+    ok('shake goyangkan ISI stage (bukan stage-nya) + token kelas, bukan classList', /#stage\.shake>#game/.test(css) && /#stage\.shake>#hud/.test(css) && /el\.className = \(\(el\.className \|\| ''\)/.test(gameJs));
+
+    /* ---- 3) sensitivitas joystick (blueprint 4.4 Settings) ---- */
+    const rect = { left: 0, top: 0, width: 120, height: 120 };
+    const v10 = UI.Joystick.computeVector(30, 60, rect, 0.14);
+    const vHi = UI.Joystick.computeVector(30, 60, rect, 0.14, 1.5);
+    const vLo = UI.Joystick.computeVector(30, 60, rect, 0.14, 0.7);
+    ok('sens 1.5 > 1.0 > 0.7 pada jarak yang sama', Math.abs(vHi.dx) > Math.abs(v10.dx) && Math.abs(v10.dx) > Math.abs(vLo.dx), [vLo.dx, v10.dx, vHi.dx]);
+    ok('sensitivitas tidak pernah menembus 1.0', Math.abs(UI.Joystick.computeVector(120, 60, rect, 0.14, 2).dx) <= 1 && Math.abs(UI.Joystick.computeVector(30, 60, rect, 0.14, 99).dx) <= 1);
+    ok('deadzone tetap mematikan input sentuh kecil (apa pun sens-nya)', UI.Joystick.computeVector(61.5, 60, rect, 0.14, 0.7).active === false && UI.Joystick.computeVector(61.5, 60, rect, 0.14, 1.5).active === false);
+    ok('sens default = 1 (lama, tidak mengubah rasa kontrol)', Math.abs(UI.Joystick.computeVector(30, 60, rect, 0.14).dx - v10.dx) < 1e-9);
+    ok('Joystick(opt.sensitivity) di-clamp 0.5..2 + default 1', new UI.Joystick(null, { sensitivity: 9 }).sensitivity === 2 && new UI.Joystick(null, {}).sensitivity === 1 && new UI.Joystick(null, { sensitivity: 'x' }).sensitivity === 1);
+    ok('slider #sensRange (70..150) + label #sensVal ada di Settings', /id="sensRange"[^>]*min="70"[^>]*max="150"/.test(html) && /id="sensVal"/.test(html));
+    ok('game.js menyimpan sens ke hideseek_ui + meneruskan ke computeVector', /uiPrefs\.sens = v; saveUiPrefs\(\)/.test(gameJs) && /computeVector\(e\.clientX, e\.clientY, r, 0\.14, joy\.sens\)/.test(gameJs) && /sens: 1/.test(gameJs));
+
+    /* ---- 4) papan skor lokal persisten (blueprint 6.2) ---- */
+    const sc = new LocalScores(makeMemoryStore());
+    ok('LocalScores: key hideseek_scores + cap 10', sc.key === 'hideseek_scores' && sc.cap === 10);
+    for (let i = 0; i < 15; i++) sc.add({ name: 'p' + i, score: i * 7, ts: 1000 + i });
+    ok('hanya 10 teratas disimpan, urut skor desc', sc.length === 10 && sc.best() === 98 && sc.rows[9].score === 35, sc.rows.map(r => r.score));
+    ok('top(5) = lima teratas', sc.top(5).length === 5 && sc.top(5)[0].score === 98);
+    ok('add() mengembalikan rank, baris, dan daftar baru', (function () { const r = sc.add({ name: 'juara', score: 500, role: 'SEEKER', win: true }); return r.rank === 1 && r.row.score === 500 && r.rows[0].name === 'juara'; })());
+    ok('skor negatif/NaN -> 0 (tidak merusak daftar)', (function () { return sc.add({ score: -5 }).row.score === 0 && sc.add({ score: NaN }).row.score === 0; })());
+    ok('nama dipotong 24 karakter (XSS/scroll protection)', sc.add({ name: 'x'.repeat(60), score: 1 }).row.name.length === 24);
+    ok('role dinormalisasi ke HIDER/SEEKER', sc.add({ score: 1, role: 'admin' }).row.role === 'HIDER' && sc.add({ score: 1, role: 'SEEKER' }).row.role === 'SEEKER');
+    ok('seri -> yang dicapai lebih dulu menang', (function () { const a = new LocalScores(makeMemoryStore()); a.add({ name: 'z', score: 10, ts: 99 }); a.add({ name: 'a', score: 10, ts: 11 }); return a.rows[0].name === 'a'; })());
+    ok('persist antar-instance (baca ulang dari storage)', new LocalScores(sc.storage).best() === 500);
+    sc.storage.setItem(sc.key, '{korup');
+    ok('storage korup/JSON rusak -> daftar kosong, tidak melempar', new LocalScores(sc.storage).length === 0);
+    ok('baris rusak (tanpa score) dibuang saat load', (function () { const t = makeMemoryStore(); t.setItem('hideseek_scores', JSON.stringify([{ name: 'a' }, { score: 5 }, null, { score: 'abc' }])); return new LocalScores(t).length === 1; })());
+    ok('tanggal baris pakai locale id ("1 Sep")', /^\d{1,2} \w{3}$/.test(LocalScores.fmtDate(Date.now())), LocalScores.fmtDate(Date.now()));
+    ok('clear() mengosongkan daftar', (function () { const t = makeMemoryStore(); const a = new LocalScores(t); a.add({ score: 5 }); return a.clear().length === 0 && new LocalScores(t).length === 0; })());
+    ok('hasil ronde dicatat + #localLbBody/#localLbWrap dirender', /localScores\.add\(\{ name: me\.name/.test(gameJs) && /id="localLbBody"/.test(html) && /id="localLbWrap"/.test(html) && /lw\.className = localScores\.length \? 'on' : ''/.test(gameJs) && /function renderLocalBoard\(/.test(gameJs) && /renderLocalBoard\(0\);/.test(gameJs));
+    ok('panel papan skor HUD ikut menampilkan rekor lokal', /rekor lokal · top /.test(gameJs) && /localScores\.top\(5\)/.test(gameJs));
+    ok('ada tombol hapus rekor lokal di Settings', /id="clearLbBtn"/.test(html) && /onClick\('clearLbBtn'/.test(gameJs) && /localScores\.clear\(\)/.test(gameJs));
+
+    /* ---- 5) aset UI baru (item 5: ikon + bingkai + latar) ---- */
+    const NEW = ['assets/Icon_Coin.png', 'assets/Icon_Life.png', 'assets/UI_HealthFrame.png', 'assets/UI_MinimapFrame.png', 'assets/Bg_Splash.jpg'];
+    ok('5 aset UI baru ada di web/assets', NEW.every(f => fs.existsSync(WEB(f))), NEW.filter(f => !fs.existsSync(WEB(f))));
+    ok('file punya signature PNG/JPEG yang benar', NEW.every(f => { const b = fs.readFileSync(WEB(f)); return f.endsWith('.jpg') ? (b[0] === 0xFF && b[1] === 0xD8) : b.slice(1, 4).toString('latin1') === 'PNG'; }));
+    ok('masing-masing < 200KB (hemat utk HP)', NEW.every(f => fs.statSync(WEB(f)).size < 200 * 1024), NEW.map(f => fs.statSync(WEB(f)).size));
+    ok('ikon PNG punya kanal alpha (di-key dari magenta)', ['assets/Icon_Coin.png', 'assets/Icon_Life.png', 'assets/UI_HealthFrame.png', 'assets/UI_MinimapFrame.png'].every(f => { const b = fs.readFileSync(WEB(f)); return b[25] === 6 || b[25] === 4; }), ['assets/Icon_Coin.png'].map(f => fs.readFileSync(WEB(f))[25]));
+    ok('tidak ada file mentah/_raw_ ikut di repo', fs.readdirSync(WEB('assets')).every(f => !/^_raw_|asset_check/.test(f)), fs.readdirSync(WEB('assets')).filter(f => /^_raw_|asset_check/.test(f)));
+    ok('emoji koin/nyawa di pill diganti <img class="ico">', /class="ico" src="assets\/Icon_Coin\.png"/.test(html) && /class="ico" src="assets\/Icon_Life\.png"/.test(html) && !/>\u{1FA99} 0</u.test(html));
+    ok('JS menulis angka saja ke <b id="coins"> (ikon tidak terhapus)', /txt\('coins', String\(profile\.coins\)\); txt\('lives', '×' \+ profile\.lives\)/.test(gameJs));
+    ok('bingkai HP & minimap memakai aset baru', /#hpBar\{[^}]*UI_HealthFrame\.png/.test(css) && /#minimapWrap\{[\s\S]{0,200}UI_MinimapFrame\.png/.test(css));
+    ok('splash & menu punya latar hidup (ken-burns) >=2 .bgimg', /#splash \.bgimg\{[^}]*Bg_Splash\.jpg/.test(css) && /@keyframes kenburns/.test(css) && (html.match(/class="bgimg"/g) || []).length >= 2);
+    ok('reduced-motion mematikan ken-burns & shake', /prefers-reduced-motion[\s\S]*#splash \.bgimg[\s\S]*animation:none/.test(css));
+    ok('aset baru ikut di-precache service worker', NEW.every(f => shellList.indexOf('./' + f) >= 0), NEW.filter(f => shellList.indexOf('./' + f) < 0));
+    ok('particles.js juga di-precache', shellList.indexOf('./particles.js') >= 0);
+    ok('LOAD sprite game.js tidak dirusak (aset UI tidak masuk atlas)', !/UI_HealthFrame|Icon_Coin/.test(gameJs.slice(0, gameJs.indexOf('const LOAD')) + (gameJs.match(/const LOAD = \[[\s\S]*?\];/) || [''])[0]));
   }
 
   console.log(`\n=== web_ui_test: ${pass} PASS, ${fail} FAIL ===`);

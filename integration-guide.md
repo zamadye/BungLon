@@ -11,8 +11,13 @@ tanpa build step. Dua sistem di sini berdiri sendiri: boleh dipakai di project H
 | `web/config.example.js` | template konfigurasi (`window.HIDESEEK_CONFIG`). **ID iklan tidak pernah ditulis di kode** |
 | `tools/gen_web_config.js` | pembangkit `web/config.js` dari `.env` (di-gitignore) |
 | `web/game.js` | contoh pemakaian nyata: tombol HUD, koin, +1 nyawa, jeda permainan |
+| `web/uiKit.js` | lapisan UI vanilla: `Joystick` (deadzone + sensitivitas), `SkillButton` (cincin cooldown), `Screens`, `Fx`, `Viewport`, `Haptics` — tidak dipakai `AdsManager`/`ReferralSystem`, jadi tidak wajib disalin |
+| `web/audioKit.js` | SFX + BGM sintesis Web Audio, `duck()` saat iklan (dipanggil game.js, opsional) |
+| `web/particles.js` | FX canvas (debu lari, burst kena, sparkle koin, cincin blast/radar); menghormati `prefers-reduced-motion` |
+| `web/ui.css`, `web/index.html` | zoning + layar; **id elemen lama dipertahankan** sehingga `#coins`, `#lives`, `#maxhpTag`, `#adLifeBtn`, `#adCoinsBtn`, `#inviteBtn` tetap seperti di §3–§7 |
+| `web/assets/UI_HealthFrame.png`, `UI_MinimapFrame.png`, `Icon_Coin.png`, `Icon_Life.png`, `Bg_Splash.jpg` | aset UI (bingkai HP & minimap, ikon koin/nyawa pengganti emoji, latar splash) — ikut di-precache `web/sw.js` |
 | `tools/web_ads_referral_test.js` | 130 assertion headless (tanpa browser) |
-| `tools/web_dom_smoke.js` | blok `[4]` — integrasi iklan/referral di DOM tiruan |
+| `tools/web_dom_smoke.js` | blok `[4]` integrasi iklan/referral, `[5]` UI v2, `[6]` layar hasil (rank/XP/rekor lokal) di DOM tiruan |
 
 ---
 
@@ -204,21 +209,25 @@ parity + jalur uji. Kalau mau seragam, set `ADS_COOLDOWN_SECONDS=12` di `.env` (
 **State yang ditambahkan `web/game.js`** (karena build web belum punya ekonomi): `Profile` di
 `localStorage['hideseek_profile']` berisi `coins`, `bonusHp` (Max HP tambahan, dipakai saat
 `Round.start()`), `lives` (nyawa cadangan — otomatis terpakai saat kamu jadi hantu), `rounds`, `best`,
-`totalAdRewards`. Reward iklan dan referral masuk ke sini lewat `playerAPI`.
+`totalAdRewards`, dan `xp` (progres level layar hasil). Reward iklan dan referral masuk ke sini lewat `playerAPI`.
+
+Sejak UI v2.1 ada dua kunci tambahan yang **tidak** berkaitan dengan ekonomi iklan: `localStorage['hideseek_ui']` (preferensi: `haptics`, `sens`, `orient`, `lang`, `lb`) dan `localStorage['hideseek_scores']` (papan skor lokal top-10, `[ {name, score, role, win, ts} ]`). Yang terakhir murni kosmetik — jangan dipakai sebagai dasar pembayaran reward; itu tetap tugas backend (§9).
 
 ## 8. Jalankan & uji
+
+UI v2.1 (partikel canvas + guncangan layar, XP/level & peringkat di layar hasil, sensitivitas joystick, papan skor lokal top-10 di `localStorage['hideseek_scores']`) hanyalah lapisan tampilan + progres lokal: **kontrak `AdsManager` dan `ReferralSystem` tidak berubah**, jadi seluruh §1–§7 di dokumen ini tetap berlaku. Level/XP web-only — aturan skor/koin yang diparitas dengan C# tidak disentuh.
 
 ```bash
 node web/net-server.js            # http://localhost:8790/  → MAIN SENDIRI (bots)
 node tools/gen_web_config.js      # opsional, dari .env
 node tools/web_selftest.js        # 192 PASS — rules engine 1:1 dengan C#
-node tools/web_dom_smoke.js       #  85 PASS — lapisan browser + integrasi iklan/referral + UI v2
+node tools/web_dom_smoke.js       # 118 PASS — browser tiruan + [4] iklan/referral + [5] UI v2 + [6] UI v2.1
 node tools/web_ads_referral_test.js  # 130 PASS — AdsManager + ReferralSystem + Profile
-node tools/web_ui_test.js         # 153 PASS — uiKit (joystick/cooldown/screens/FX), audioKit, PWA
-cd web && npm test                # keempatnya sekaligus (560 assertion)
+node tools/web_ui_test.js         # 227 PASS — uiKit, audioKit, particles, XP/level, sensitivitas, LocalScores, PWA
+cd web && npm test                # keempatnya sekaligus (667 assertion)
 ```
 
 Verifikasi cepat di browser: buka game → tekan `?solo=1` → klik **📺 Dapatkan Koin** → overlay iklan
-1.5 dtk + HUD `🪙 50`; klik lagi → toast `Tunggu 30 detik lagi`; **🎁 Undang Teman** → kode + link;
+1.5 dtk + HUD `50` di pill berikon koin; klik lagi → toast `Tunggu 30 detik lagi`; **🎁 Undang Teman** → kode + link;
 buka link itu di tab baru → popup “Selamat datang! … +50 Koin & +1 Nyawa!”. Konsol:
 `hideSeekGame.profile`, `hideSeekGame.ads.cfg`, `hideSeekReferral.getStats()`.

@@ -37,7 +37,7 @@ Assets/
 └── Resources/HideSeek/   fallback prefab agar project langsung bisa di-playtest
 
 web/                BUILD TANPA UNITY (bagian 10): index.html + game.js + net-server.js + assets/
-tools/              web_selftest.js (paritas CFG↔C# + rules), web_dom_smoke.js, web_map_preview.py
+tools/              web_selftest.js (paritas CFG↔C# + rules), web_dom_smoke.js (118), web_ui_test.js (227), web_ads_referral_test.js (130), web_map_preview.py
 Tools/hideseek_art_postprocess.py   (keying/segmentasi/resize PNG art, hanya pillow)
 ```
 
@@ -78,7 +78,7 @@ Tools/hideseek_art_postprocess.py   (keying/segmentasi/resize PNG art, hanya pil
 > **Tidak punya Unity sekarang?** Ada build web (HTML5 canvas) yang memakai aturan & sprite yang
 > sama: `node web/net-server.js` → buka `http://localhost:8790` → **MAIN SENDIRI (bots)**.
 > Detail + cara uji: **bagian 10**. Build web = demo/prototipe; rilis Play Store tetap lewat Unity.
-> Test otomatis: `node tools/web_selftest.js` (192 assertion: konstanta C# == aturan web) · `npm test` di `web/` menjalankan 4 suite (560 assertion).
+> Test otomatis: `node tools/web_selftest.js` (192 assertion: konstanta C# == aturan web) · `npm test` di `web/` menjalankan 4 suite (667 assertion, 0 FAIL).
 
 ---
 
@@ -372,7 +372,7 @@ kuota iklan 1/2/2 + gap 12 s). **`tools/web_selftest.js` membaca file C# dan mem
 ```bash
 node tools/web_selftest.js    # 192 assertion: paritas konfigurasi + rules (phase, camo, hit,
                               #   catch, blast/radar, leaderboard, kuota reward, snapshot, bot AI)
-node tools/web_dom_smoke.js   # 26 assertion: lapisan browser (asset loader, renderer, HUD,
+node tools/web_dom_smoke.js   # 118 assertion: lapisan browser (loader, renderer, HUD, iklan/referral, UI v2 + v2.1)
                               #   joystick, overlay iklan) dijalankan di DOM tiruan
 python3 tools/web_map_preview.py   # PNG QC peta: zoning tile + spot prop + ring spawn (ArtRaw/)
 ```
@@ -393,7 +393,7 @@ Yang sengaja **tidak** ada di build web: Photon room browser/lobby typed, anti-c
 dan SDK iklan asli (Unity Ads). Build web dipakai untuk: validasi aturan, tuning angka,
 preview art, dan test multiplayer 2 device di browser.
 
-### UI/UX v2 (blueprint: zoning, glassmorphism, 44px, audio, PWA)
+### UI/UX v2.1 (blueprint: zoning, glassmorphism, 44px, partikel, XP, PWA)
 
 Build web sekarang punya lapisan UI sendiri — semua vanilla, **tanpa npm/Phaser**
 (`hud-gamepad`, `@toolcase/game-components`, Enclave template diganti implementasi lokal):
@@ -405,6 +405,8 @@ Build web sekarang punya lapisan UI sendiri — semua vanilla, **tanpa npm/Phase
 | `web/audioKit.js` | SFX + BGM **disintesis Web Audio** (0 file audio): `tap hit catch skill camo swap radar blast coin reward count go win lose join err`; BGM menu vs game beda tempo; `duck()` saat iklan; preferensi di `localStorage['hideseek_audio']` |
 | `web/index.html` | zoning blueprint: TL back+nama · TC fase+timer+role+hint+countdown · TR suara+papan skor+minimap · BC HP+reward · BR skill+dock iklan/referral · BL joystick; layar Splash, Main Menu, Lobby, HUD, Pause, Result, Settings, How-to-Play |
 | `web/manifest.webmanifest` + `web/sw.js` | PWA: Add to Home Screen, offline (app-shell precache), shortcut Solo/Room. Matikan SW: `?nosw=1` |
+| `web/particles.js` | FX canvas: debu saat lari, burst saat kena, sparkle koin/reward, heal & cincin blast/radar. Pool dibatasi (buang tertua), satuan = unit dunia, `stepList()` statis sehingga fisika bisa diuji tanpa DOM; otomatis diam bila `prefers-reduced-motion` |
+| `web/assets/UI_HealthFrame.png`, `UI_MinimapFrame.png`, `Icon_Coin.png`, `Icon_Life.png`, `Bg_Splash.jpg` | aset UI hasil AI (bingkai HP, bingkai minimap, ikon koin & nyawa pengganti emoji, latar splash). Semua berkanal alpha (kecuali .jpg) + ikut di-precache service worker |
 
 Perilaku baru yang terlihat:
 
@@ -412,13 +414,19 @@ Perilaku baru yang terlihat:
 * **Ukuran sentuh** semua tombol ≥ 44px; joystick hanya muncul di perangkat sentuh (`hover:none`).
 * **Feedback**: angka damage/heal/koin melayang di posisi pemain, kilat merah saat tertangkap, kilat hijau saat camo, getar (`vibrate`), tombol skill berdenyut saat siap, timer memerah < 10 dtk (`warn`) dan blok merah di 5 dtk terakhir (`urgent`).
 * **Splash** menampilkan progres muat sprite per aset + tips berganti; tap = lewati.
+* **Partikel + guncangan layar**: debu kaki saat berlari, burst merah saat terkena, sparkle emas saat koin/reward, cincin radar/blast — plus `shake-1/2/3` pada `#stage` (padanan “camera shake saat caught”; yang digoyangkan isi stage, bukan stage-nya, supaya tepi layar tidak membuka latar hitam).
+* **Latar hidup**: Splash (`Bg_Splash.jpg`) dan Main Menu (`Bg_Lobby.png`) digerakkan sangat lambat (ken-burns 26–34s) + vignets gelap agar teks terbaca.
+* **Layar hasil**: peringkat ronde (`#3 dari 6`), koin, XP (0,6/poin + 120 bila menang + 25 bonus main), level + bar progres, dan 5 rekor lokal terbaik. Level memakai kurva `xpForLevel(L) = 300·L(L−1)/2`; XP disimpan di `hideseek_profile`, papan skor di `hideseek_scores` (top 10).
 * **Papan skor on-demand** (ikon batang) memakai rumus skor resmi (`30/tangkap`, `detik + 10/HP`).
-* **Setelan**: SFX / musik / haptik / volume / orientasi (Screen Orientation API, boleh ditolak browser) / bahasa (kerangka) + baris diagnosa `layar 393×851 · dpr 3 · portrait · sentuh`.
+* **Setelan**: SFX / musik / haptik / volume / **sensitivitas joystick (70–150%)** / orientasi (Screen Orientation API, boleh ditolak browser) / bahasa (kerangka) / hapus rekor lokal, + baris diagnosa `layar 393×851 · dpr 3 · portrait · sentuh`. Semua preferensi di `localStorage['hideseek_ui']`.
 
-Yang **sengaja** menyimpang dari blueprint: 4 skill tidak ditampilkan sekaligus (2 per role, sesuai `UIManager` Unity — HUD minimum); chat/event log digabung ke toast; ikon back/sound/papan skor memakai SVG inline (tajam di semua DPI, tanpa aset baru); aset audio digantikan sintesis supaya tetap nol-file dan offline-able.
+Yang **sengaja** menyimpang dari blueprint: 4 skill tidak ditampilkan sekaligus (2 per role, sesuai `UIManager` Unity — HUD minimum), dan **Freeze** belum ada karena ability-nya memang tidak ada di C#/JS; tombol Prop masih tap (mode aim tahan-seret-lepas belum dibuat); kamera web *fixed* (seluruh map 800×600 terlihat) sehingga “smooth follow / zoom out saat lari” tidak diterapkan — guncangan & partikel menutupi kebutuhan feedback-nya; chat digabung ke toast; ikon back/sound/papan skor memakai SVG inline; audio & SFX disintesis Web Audio (nol file) supaya tetap offline-able. **Level/XP adalah progres web-only** — tidak menyentuh aturan skor/koin yang diparitas dengan C# (`web_selftest` tetap 192 PASS).
 
 ```bash
-node tools/web_ui_test.js    # 153 assertion: blueprint -> CSS/HTML, uiKit, audioKit, manifest/SW
+node tools/web_ui_test.js      # 227 assertion: blueprint->CSS/HTML, uiKit, audioKit,
+                               #   partikel, XP/level, sensitivitas, LocalScores, PWA
+node tools/web_dom_smoke.js    # 118 PASS: blok [6] menjalankan hasil ronde asli di DOM
+                               #   tiruan -> rank/XP/bar level/rekor lokal + shake & partikel
 ```
 
 ### Iklan rewarded (AppLixir/AdinPlay) + referral di build web
@@ -434,7 +442,8 @@ Dua modul vanilla JS, tanpa dependency — detail lengkap ada di **[`integration
 
 ```bash
 node tools/web_ads_referral_test.js   # 130 assertion: cooldown, fallback, ?ref=, hadiah
-node tools/web_dom_smoke.js           #  85 PASS: lapisan browser + blok [4] iklan/referral + blok [5] UI v2
+node tools/web_dom_smoke.js           # 118 PASS: lapisan browser + [4] iklan/referral + [5] UI v2 + [6] UI v2.1
+node tools/web_ui_test.js             # 227 PASS: blueprint→CSS/HTML, uiKit, audioKit, partikel, XP, PWA
 ```
 
 Saat iklan tayang, `game.pause()` dipanggil (loop `step()` dibekukan, ada label **IKLAN**), lalu

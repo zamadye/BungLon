@@ -325,9 +325,9 @@ function captureLogs(fn) {
     const html = rd('web/index.html');
     const scripts = [...html.matchAll(/<script[^>]*src="([^"]+)"/g)].map(m => m[1]);
     const at = f => scripts.indexOf(f);
-    ok('urutan script: config → uiKit/audio → adsManager → referralSystem → game.js',
+    ok('urutan script: config → uiKit/audio/particles → adsManager → referralSystem → game.js',
       at('config.example.js') === 0 && at('config.js') === 1 && at('uiKit.js') === 2 && at('audioKit.js') === 3 &&
-      at('adsManager.js') === 4 && at('referralSystem.js') === 5 && at('game.js') === 6, scripts);
+      at('particles.js') === 4 && at('adsManager.js') === 5 && at('referralSystem.js') === 6 && at('game.js') === 7, scripts);
     ok('config.js dimuat (opsional, onerror) setelah contoh template', /<script src="config\.js" onerror=/.test(html));
     for (const id of ['adLifeBtn', 'adCoinsBtn', 'inviteBtn', 'inviteLobbyBtn', 'coins', 'lives', 'maxhpTag', 'buyHpBtn', 'buyLifeBtn', 'pauseTag', 'referralModal']) {
       if (id === 'referralModal') continue;                       // dibuat runtime oleh referralSystem.js

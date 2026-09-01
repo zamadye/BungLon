@@ -111,7 +111,7 @@ input,select{min-height:var(--tap);background:rgba(255,255,255,.94);color:#0d1a1
 input:focus,select:focus{outline:3px solid rgba(72,176,255,.55)}
 
 /* --------------------------------- splash --------------------------------- */
-#splash{z-index:60;background:radial-gradient(90% 70% at 50% 40%,#123a29,#04100b 70%,#000)}
+#splash{z-index:60;background:#04100b}
 #splash.out{opacity:0;pointer-events:none;transition:opacity .4s ease}
 #splash .lizard{width:min(200px,44vw);animation:bob 2.2s ease-in-out infinite}
 #splashBarWrap{width:min(320px,72vw);height:10px;border-radius:9px;background:rgba(255,255,255,.16);overflow:hidden}
@@ -159,8 +159,12 @@ input:focus,select:focus{outline:3px solid rgba(72,176,255,.55)}
   clip-path:polygon(50% 100%,0 45%,12% 12%,50% 32%,88% 12%,100% 45%);transition:transform .18s,filter .18s}
 .heart.off{background:rgba(255,255,255,.18);filter:grayscale(1)}
 .heart.pop{transform:scale(1.35)}
-#hpBar{width:min(160px,40vw);height:8px;border-radius:8px;background:rgba(255,255,255,.18);overflow:hidden}
-#hpFill{height:100%;width:100%;border-radius:8px;background:linear-gradient(90deg,#57f39b,var(--hue-green));transition:width .18s ease,background .3s}
+/* HP bar: bingkai kayu (assets/UI_HealthFrame.png) + rel gelap di dalamnya */
+#hpBar{position:relative;width:min(172px,44vw);height:18px;padding:5px 8px;overflow:visible;border-radius:0;
+  background:url(assets/UI_HealthFrame.png) center/100% 100% no-repeat}
+#hpBar::before{content:'';position:absolute;left:8px;right:8px;top:5px;bottom:5px;border-radius:999px;
+  background:rgba(0,0,0,.45);box-shadow:inset 0 1px 2px #0009}
+#hpFill{position:relative;height:8px;width:100%;border-radius:999px;background:linear-gradient(90deg,#57f39b,var(--hue-green));transition:width .18s ease,background .3s}
 
 /* skill: bundar, conic cooldown, minimum 60px (>=44 touch) */
 #skills{display:flex;gap:12px;pointer-events:auto;align-items:flex-end}
@@ -238,10 +242,11 @@ input:focus,select:focus{outline:3px solid rgba(72,176,255,.55)}
 @keyframes camoFlash{from{box-shadow:inset 0 0 0 2000px rgba(61,220,132,.28)}to{box-shadow:inset 0 0 0 2000px transparent}}
 
 /* minimap + leaderboard overlay */
-#minimapWrap{position:absolute;right:calc(12px + var(--sa-r));top:calc(var(--pad-t) + 52px);width:clamp(92px,20vw,150px);
-  aspect-ratio:17/11;border-radius:var(--r-m);overflow:hidden;background:var(--glass);border:1px solid var(--stroke);
+#minimapWrap{position:absolute;right:calc(12px + var(--sa-r));top:calc(var(--pad-t) + 52px);width:clamp(96px,21vw,158px);
+  aspect-ratio:17/11;border-radius:0;overflow:hidden;padding:9px;
+  background:url(assets/UI_MinimapFrame.png) center/100% 100% no-repeat var(--glass);
   box-shadow:var(--sh-1);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
-#minimap{width:100%;height:100%}
+#minimap{width:100%;height:100%;border-radius:3px;background:rgba(4,16,11,.55)}
 #lbOverlay{position:absolute;right:calc(12px + var(--sa-r));top:calc(var(--pad-t) + 52px);width:min(280px,80vw);
   border-radius:var(--r-l);padding:12px;display:none;z-index:25;pointer-events:auto}
 #lbOverlay.on{display:block}
@@ -315,6 +320,66 @@ tr.me td{background:rgba(61,220,132,.14);font-weight:900;border-radius:8px}
 @keyframes countPop{from{transform:scale(.4);opacity:0}45%{transform:scale(1.08);opacity:1}to{transform:scale(1);opacity:.92}}
 
 /* ------------------------------ orientasi & ukuran -------------------------- */
+
+/* ---------------------------- UI v2.1 (XP/level, partikel, bingkai aset) ---------------------------- */
+/* Ikon PNG di pill/tombol: 1 gambar = 1 makna (koin = oranye, nyawa = hijau). */
+.ico{width:17px;height:17px;object-fit:contain;vertical-align:-3px;pointer-events:none}
+.pill .ico,.pillBtn .ico{width:15px;height:15px}
+.pill b{font-weight:900;font-variant-numeric:tabular-nums}
+#rewardBtn .ico{width:20px;height:20px}
+
+/* Latar hidup utk Splash & Menu (blueprint 4.1 "background animasi ringan"):
+   gambar digerakkan sangat lambat (ken-burns) -> terasa hidup tanpa menguras GPU. */
+#splash .bgimg,#menu .bgimg{position:absolute;inset:-5%;background-position:center;background-size:cover;
+  background-repeat:no-repeat;pointer-events:none;animation:kenburns 26s ease-in-out infinite alternate;
+  transform:translateZ(0);will-change:transform}
+#splash .bgimg{background-image:url(assets/Bg_Splash.jpg);filter:saturate(1.06) brightness(.94)}
+#menu .bgimg{background-image:url(assets/Bg_Lobby.png);filter:saturate(1.02) brightness(.42) blur(1px);animation-duration:34s}
+#splash .shade{position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(80% 62% at 50% 42%,rgba(4,16,11,.12),rgba(4,16,11,.8) 70%,rgba(0,0,0,.95))}
+#splash>*:not(.bgimg):not(.shade){position:relative;z-index:2}
+#menu .card{position:relative;z-index:2}
+@keyframes kenburns{from{transform:scale(1) translate3d(0,0,0)}to{transform:scale(1.085) translate3d(-1.6%,1.2%,0)}}
+
+/* Screen shake (padanan "camera shake saat caught"): goyangkan ISI stage, bukan
+   stage-nya, supaya tepi layar tidak membuka latar hitam. Kelas dipasang JS:
+   shake-1/2/3 = intensitas. prefers-reduced-motion mematikan animasi (lihat bawah). */
+#stage.shake{--shk:3px}
+#stage.shake-1{--shk:2px}
+#stage.shake-2{--shk:4px}
+#stage.shake-3{--shk:7px}
+#stage.shake>#game,#stage.shake>#hud{animation:stageShake .26s cubic-bezier(.36,.07,.19,.97) both}
+#stage.shake-2>#game,#stage.shake-2>#hud{animation-duration:.32s}
+#stage.shake-3>#game,#stage.shake-3>#hud{animation-duration:.4s}
+@keyframes stageShake{
+  10%{transform:translate(calc(var(--shk)*-1),var(--shk))}25%{transform:translate(var(--shk),calc(var(--shk)*-1))}
+  45%{transform:translate(calc(var(--shk)*-.7),calc(var(--shk)*.55))}65%{transform:translate(calc(var(--shk)*.6),var(--shk))}
+  85%{transform:translate(calc(var(--shk)*-.25),0)}100%{transform:none}}
+
+/* Baris "#rank / koin / XP / level" di layar hasil (blueprint 4.1 Game Over) */
+#rankRow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:center;margin:10px 0 2px}
+.pill.rank{background:linear-gradient(180deg,#d3b8ff,var(--hue-purple));color:#180a2b;border-color:#ffffff40;font-weight:900;letter-spacing:.4px}
+.pill.xp{background:linear-gradient(180deg,#ffeab5,var(--hue-orange));color:#2b1700;font-weight:900}
+.lvlbox{display:inline-flex;align-items:center;gap:7px}
+.lvlbox .lvl{font-size:12px;font-weight:900;color:var(--ink);background:rgba(255,255,255,.14);padding:3px 8px;border-radius:999px}
+.lvlbox .lvl.up{background:var(--hue-green);color:#04240f;animation:beat .7s ease-in-out 3}
+.lvlbox .bar{display:inline-block;width:84px;height:7px;border-radius:999px;background:rgba(0,0,0,.42);
+  overflow:hidden;box-shadow:inset 0 0 0 1px #ffffff2e;vertical-align:middle}
+.lvlbox .bar i{display:block;height:100%;width:0;border-radius:999px;background:linear-gradient(90deg,#57f39b,var(--hue-orange));transition:width .5s ease}
+
+/* Papan skor lokal (top 5) di layar hasil + pemisah di panel papan skor HUD */
+#localLbWrap{display:none;margin-top:12px;text-align:left}
+#localLbWrap.on{display:block}
+#localLbWrap .lbHead{margin:0 0 4px;letter-spacing:.3px;text-align:center}
+#localLbWrap table{width:100%;font-size:12px}
+#result table tr.sep td,#lbOverlay table tr.sep td{padding-top:9px;border-top:1px dashed #ffffff2e;text-align:center;
+  font-size:10.5px;letter-spacing:1.4px;text-transform:uppercase;color:var(--ink-dim)}
+#result table tr.dim td,#lbOverlay table tr.dim td{opacity:.6}
+
+/* Slider sensitivitas joystick di Settings (baris 70%..150%) */
+.sens{display:inline-flex;align-items:center;gap:8px}
+.sens b{font-size:12px;font-weight:900;min-width:42px;text-align:right;color:var(--hue-orange);font-variant-numeric:tabular-nums}
+
 @media (orientation:portrait){
   .zone.tc{top:calc(var(--pad-t) + 2px)}
   #timer{font-size:clamp(30px,12vw,54px)}
@@ -337,5 +402,7 @@ tr.me td{background:rgba(61,220,132,.14);font-weight:900;border-radius:8px}
   #hint{display:none}                 /* HUD minimum: hint tidak muat */
 }
 @media (hover:none) and (pointer:coarse){ #joy.hint{outline:2px solid rgba(255,255,255,.25)} }
-@media (prefers-reduced-motion:reduce){ *{animation:none!important;transition:none!important} }
+@media (prefers-reduced-motion:reduce){ *{animation:none!important;transition:none!important}
+  #splash .bgimg,#menu .bgimg{animation:none!important;transform:none!important}
+  #stage.shake>#game,#stage.shake>#hud{animation:none!important;transform:none!important} }
 @media (prefers-contrast:more){ .glass,#hud .pill{background:#04100b;border-color:#fff6} }
