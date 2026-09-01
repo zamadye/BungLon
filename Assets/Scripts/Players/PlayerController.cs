@@ -211,13 +211,18 @@ namespace HideSeek.Players
             GameManager gm = GameManager.Instance;
             bool stunned = Combat != null && Combat.IsPushing;      // sedang terlempar -> input dikunci
             // Seeker dikunci selama HIDE PHASE (hider bebas bergerak) - lihat GameManager.CanMove.
-            bool canMove = !IsGhost && !stunned && !frozenForProp && (gm == null || gm.CanMove(gm.State, Role));
+            bool canMove = !IsGhost && !stunned && (gm == null || gm.CanMove(gm.State, Role));
 
             MoveInput = canMove ? ReadMoveInput() : Vector2.zero;
 
+            // Prop Swap: saat jadi prop pemain tidak berpindah, TAPI MoveInput tetap terbaca
+            // supaya HiderSkill.Update dapat membatalkan samaran begitu ada input gerak
+            // (spesifikasi: "jadi prop acak 8 detik, dibatalkan jika pemain bergerak").
+            Vector2 drive = frozenForProp ? Vector2.zero : MoveInput;
+
             if (body != null)
             {
-                Vector2 vel = MoveInput * CurrentMoveSpeed;      // unit/detik (dikirim ke jaringan)
+                Vector2 vel = drive * CurrentMoveSpeed;         // unit/detik (dikirim ke jaringan)
                 netSendVelocity = vel;
 
                 // BodyType Kinematic TIDAK membaca velocity -> wajib MovePosition (ceklist manual
@@ -231,15 +236,15 @@ namespace HideSeek.Players
             else
             {
                 // Tidak ada Rigidbody2D (mis. debug) -> gerakkan transform langsung.
-                Vector2 vel = MoveInput * CurrentMoveSpeed * Time.deltaTime;
+                Vector2 vel = drive * CurrentMoveSpeed * Time.deltaTime;
                 transform.position += (Vector3)vel;
-                netSendVelocity = MoveInput * CurrentMoveSpeed;
+                netSendVelocity = drive * CurrentMoveSpeed;
             }
 
-            // hadap kiri/kanan (visual saja)
-            if (Mathf.Abs(MoveInput.x) > 0.01f && visual != null)
+            // hadap kiri/kanan (visual saja; prop yang diam tidak boleh berbalik)
+            if (Mathf.Abs(drive.x) > 0.01f && visual != null)
             {
-                bool flip = MoveInput.x < 0f;
+                bool flip = drive.x < 0f;
                 if (flip != netFlip) { netFlip = flip; visual.SetFlip(flip); }
             }
 

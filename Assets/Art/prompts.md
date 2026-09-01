@@ -36,6 +36,7 @@ Tools/…postprocess.py      keying magenta -> alpha, pisahkan objek, auto-crop,
 | `icon_revive.png` | red heart with white play triangle + yellow sparkles (ikon tombol rewarded-ad) |
 | `bg_lobby.png` | 9:16 vertical dusk jungle canopy clearing, dark muted center so UI text stays readable |
 | `app_icon.png` | rounded-square yellow→orange gradient badge, green chameleon head, glossy cartoon game icon |
+| `Logo_HideSeek.png` | 16:9 title banner: teks "HIDE SEEK" + subtitle "Sembunyi Jadi Barang", chameleon mengintip di belakang huruf, gradient kuning→oranye — khusus build web (`web/assets/`) |
 
 > Gambar pemeriksaan cepat: `ArtRaw/_preview_sprites.png` (semua sprite di atas latar abu-abu
 > dan magenta - untuk mengecek keying tidak menyisakan fringe) dan
@@ -91,3 +92,30 @@ Setting import (Read/Write, PPU, filter, mesh type) **tidak perlu disentuh** —
 - Untuk Play Store: ikon launcher final dari `Icons/AppIcon.png` (512×512, tanpa alpha) di
   `Player Settings ▸ Icon ▸ Override for Android`, dan 1024×512 feature graphic untuk listing.
 - Ganti placeholder teks (nama prop, toast) ke Bahasa Indonesia/Inggris sesuai target store.
+
+## 7. Build web (tanpa Unity) memakai sprite yang sama
+
+`web/` (README bagian 10) menggambar PNG yang sama di HTML5 canvas, jadi satu aset dipakai dua
+target. Setelah menambah/mengganti art, sinkronkan:
+
+```bash
+mkdir -p web/assets && cp Assets/Art/HideSeek/*/*.png web/assets/
+```
+
+Opsional — perkecil untuk web (project Unity tidak terpengaruh, file sumber tetap utuh):
+
+```bash
+python3 - <<'PY'
+from PIL import Image; import glob
+for f in glob.glob('web/assets/*.png'):
+    im = Image.open(f).convert('RGBA')
+    if max(im.size) > 512:
+        im = im.resize((512, int(im.height * 512 / im.width)), Image.LANCZOS)
+    im.quantize(colors=192, method=Image.MEDIANCUT).save(f, optimize=True)
+PY
+```
+
+Ukuran saat ini: `Bg_Lobby.png` ±400 KB (background), tile/prop/ikon 15–45 KB, total `web/assets`
+±1.3 MB. Acuan skala: **128 px = 1 unit dunia** (PPU 128 di Unity lewat `HideSeekTextureImporter`,
+dan `CFG.tile`/`scale` di `web/game.js`) — kalau PPU diubah, keduanya harus diubah bersama;
+`tools/web_selftest.js` sudah mengunci zoning peta & ukuran grid, tapi tidak mengunci PPU.

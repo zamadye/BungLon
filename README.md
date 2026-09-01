@@ -26,10 +26,19 @@ Assets/
 │   │               MinimapRadarView.cs   (minimap + lingkaran radar)
 │   │               SonicBlastEffect.cs   (ring blast)
 │   │               PlayerCamera.cs       (kamera ortho, ikut Seeker saat jadi hantu)
+│   ├── Monetization/ AdsManager.cs       (rewarded ad Unity Ads + fallback simulasi)
+│   │               RewardOffers.cs      (3 penawaran reward + kuota per ronde)
 │   └── Editor/     HideSeekSetupTool.cs  (menu setup otomatis — hanya Editor, tidak ikut build)
+│                 HideSeekArtInstaller.cs (Setup → 5: pasang PNG art AI ke prefab/UI)
+│                 HideSeekTextureImporter.cs (import rule: Read/Write utk tile, PPU 128)
 ├── Prefabs/        PlayerNetworked, Props (Meja/Kursi/Pot), SonicBlastRing
 ├── UI/             Canvas HUD + Lobby (hasil menu setup / manual)
+├── Art/HideSeek/   19 sprite + background + app icon hasil generate AI (lihat Art/prompts.md)
 └── Resources/HideSeek/   fallback prefab agar project langsung bisa di-playtest
+
+web/                BUILD TANPA UNITY (bagian 10): index.html + game.js + net-server.js + assets/
+tools/              web_selftest.js (paritas CFG↔C# + rules), web_dom_smoke.js, web_map_preview.py
+Tools/hideseek_art_postprocess.py   (keying/segmentasi/resize PNG art, hanya pillow)
 ```
 
 ---
@@ -65,6 +74,11 @@ Assets/
    pemain otomatis jadi 1 (lihat `GameManager.allowSoloStart`).
 
 > Tanpa menu setup pun project tetap compile; hanya field Inspector yang kosong.
+
+> **Tidak punya Unity sekarang?** Ada build web (HTML5 canvas) yang memakai aturan & sprite yang
+> sama: `node web/net-server.js` → buka `http://localhost:8790` → **MAIN SENDIRI (bots)**.
+> Detail + cara uji: **bagian 10**. Build web = demo/prototipe; rilis Play Store tetap lewat Unity.
+> Test otomatis: `node tools/web_selftest.js` (192 assertion: konstanta C# == aturan web).
 
 ---
 
@@ -285,8 +299,9 @@ reward hanya diberikan bila callback SDK `ShowResult.Finished`; ada jeda minimum
 ### Catatan anti-cheat
 Revive (satu-satunya reward yang mengubah state pemain lain) divalidasi Host:
 `photonEvent.Sender == actor`, `Role == Hider`, `Combat.IsDead`, ronde berjalan, kuota belum
-habis. Skip-cooldown & Frenzy murni memengaruhi klien pemiliknya, sama seperti所有权
-posisi pemain di PUN, jadi tidak perlu tambahan otoritas.
+habis. Skip-cooldown & Frenzy murni memengaruhi klien pemiliknya sendiri — sama seperti PUN
+yang hanya mengizinkan **owner** `PhotonView` mengirim state miliknya — jadi tidak perlu
+tambahan validasi otoritas.
 
 ---
 
@@ -315,3 +330,83 @@ posisi pemain di PUN, jadi tidak perlu tambahan otoritas.
 **Solo test (tanpa teman, tanpa App ID):** `Window → Photon → ... →` biarkan App ID apa adanya,
 centang `offlineMode` di `NetworkManager` scene Lobby → Play → tekan `Space`. `PhotonNetwork.Instantiate`
 berjalan lokal, semua state machine + skill + UI teruji; hanya sinkronisasi antar-device yang tidak teruji.
+
+---
+
+## 10) Build tanpa Unity (web demo, HTML5 canvas)
+
+Satu-satunya cara menjalankan game ini tanpa menginstal Unity: `web/` adalah port 1-file
+dari aturan C# yang sama, digambar di `<canvas>` dan memakai **sprite yang sama persis**
+dengan `Assets/Art/HideSeek/**` (disalin ke `web/assets/`).
+
+### Jalankan
+
+```bash
+node web/net-server.js            # port 8790 (bisa: node web/net-server.js 3000)
+# buka http://localhost:8790/  → tombol MAIN SENDIRI (bots)
+```
+
+Server itu juga = relay room mini (HTTP long-poll, tanpa dependency npm):
+**BUAT ROOM** → muncul kode 4 huruf → tab/browser lain pilih **GABUNG** + isi kode.
+Host = Authority untuk phase timer & keputusan tangkap, sama seperti `GameManager`.
+
+| Aksi | Unity | web demo |
+|---|---|---|
+| gerak | WASD + joystick virtual (`MobileJoystick`) | `A/D/W/S`, `←↑↓→`, atau joystick di layar |
+| skill 1 / 2 | tombol HUD (radial `cooldownFill`) | `1` / `2` atau tombol di kanan-bawah |
+| menangkap | `Tap` → `PlayerCombat.RequestCatch` | `klik`/`tap` di dekat hider (maks. 3 unit) |
+| Kamuflase | raycast → rata-rata warna `Collider2D` tanah | rata-rata warna piksel tile di bawah kaki (dihitung dari PNG tile) |
+| Prop Swap | `FreezeForProp` + batal saat ada input gerak | identik |
+| Radar / Sonic Blast | ping minimap 1s; ring r=5 → slow 50%/2s | digambar prosedural (tanpa aset VFX) |
+| Rewarded ad | `AdsManager` (SDK) / `simulateAds` | overlay simulasi 1.5s (`simulateAds`) |
+| Net | Photon PUN 2 (`[PunRPC]`, `RaiseEventOptions`) | relay HTTP long-poll (khusus demo) |
+
+### Nilai aturan = 1:1 dengan C#
+
+`CONFIG` di `web/game.js` adalah salinan `HideSeekConstants.cs` (fase 5/30/60/10 s, 3 HP,
+speed 6, seeker ×1.15, pushback 3 m, kebal 0.6 s, alpha hantu 0.3, prop swap 8 s, radar/blast
+CD 8 s, blast r=5 → 50% slow 2 s, tangkap ≤3 unit, skor catch×30 / bertahan+HP×10,
+kuota iklan 1/2/2 + gap 12 s). **`tools/web_selftest.js` membaca file C# dan membandingkan
+ angkanya**, jadi kalau konstanta Unity diubah lalu web lupa disinkronkan, test gagal.
+
+```bash
+node tools/web_selftest.js    # 192 assertion: paritas konfigurasi + rules (phase, camo, hit,
+                              #   catch, blast/radar, leaderboard, kuota reward, snapshot, bot AI)
+node tools/web_dom_smoke.js   # 26 assertion: lapisan browser (asset loader, renderer, HUD,
+                              #   joystick, overlay iklan) dijalankan di DOM tiruan
+python3 tools/web_map_preview.py   # PNG QC peta: zoning tile + spot prop + ring spawn (ArtRaw/)
+```
+
+### Aset media
+
+`web/assets/*.png` = hasil `Assets/Art/HideSeek/**` (sudah di-key + diresize). Ulangi sinkron
+setelah mengganti art:
+
+```bash
+mkdir -p web/assets && cp Assets/Art/HideSeek/*/*.png web/assets/ && rm -f web/assets/AppIcon.png
+cp Assets/Art/HideSeek/Icons/AppIcon.png web/assets/    # (logo: generate_image -> web/assets/Logo_HideSeek.png)
+```
+
+Yang sengaja **tidak** ada di build web: Photon room browser/lobby typed, anti-cheat owner
+(`PhotonNetwork.Instantiate` + `RpcTarget.All`), layer `Ground` + `Physics2D.OverlapPointAll`
+(camo sampling web membaca piksel, bukan collider), joystick `MobileJoystick` versi Unity,
+dan SDK iklan asli (Unity Ads). Build web dipakai untuk: validasi aturan, tuning angka,
+preview art, dan test multiplayer 2 device di browser.
+
+### Mau jadi APK dari build web? (opsional, bukan jalur rilis utama)
+
+```bash
+npm i -D @capacitor/core @capacitor/cli @capacitor/android && npx cap init
+# webDir = "web" -> npx cap add android && npx cap copy && npx cap open android
+```
+Alternatif: TWA/`WebView` wrapper. Catatan penting: netcode web (long-poll) **bukan** PUN2 —
+bila ingin rilis Play Store dengan multiplayer sungguhan, pakai project Unity (bagian 1–8);
+aplikasi WebView hanya cocok untuk versi offline/bots saja.
+
+### Batasan yang perlu diketahui
+
+* Relay `web/net-server.js` tidak mengenkripsi/otoritas-kan seperti Photon; jangan pakai untuk
+  sesuatu yang serius.
+* `?solo=1` pada URL langsung memulai ronde dengan bot (praktis untuk screenshot/otomasi).
+* Orientasi: UI dibuat portrait-friendly, tapi belum diuji di perangkat; pakai DevTools device
+  emulation untuk cek cepat.

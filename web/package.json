@@ -1,0 +1,11 @@
+{
+  "name": "hideseek-web-demo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Build web (HTML5 canvas) HideSeek Online — aturan 1:1 dengan Assets/Scripts, tanpa Unity engine.",
+  "scripts": {
+    "start": "node net-server.js",
+    "test": "node ../tools/web_selftest.js && node ../tools/web_dom_smoke.js",
+    "preview": "python3 ../tools/web_map_preview.py"
+  }
+}
