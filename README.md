@@ -387,6 +387,9 @@ tambahan validasi otoritas.
 | Tap untuk menangkap tidak jalan | `hiderLayerMask` tidak mencakup layer pemain, atau `EventSystem.IsPointerOverGameObject` menahan input (tombol terlalu besar). |
 | `DefaultPool failed to load "PlayerNetworked". Make sure it's in a "Resources" folder` | Prefab pemain ada di **sub-folder** Resources (`Resources/HideSeek/`). Pindahkan ke **`Assets/Resources/PlayerNetworked.prefab`** (root) — `PhotonNetwork.Instantiate()` memakai `Resources.Load(namaFile)`. |
 | Klik Start muncul "Butuh minimal 2 pemain" | Wajar saat online. Untuk test sendirian: centang `offlineMode` di `NetworkManager`, atau centang `allowSoloStart` di `GameManager`. |
+| **Web: macet di "MEMUAT …" / visual game tidak muncul** | Biasanya servernya tidak jalan atau halaman dibuka sebagai file (`file://`). Jalankan `node web/net-server.js` → `http://localhost:8790/`. Masih macet? tekan **MUAT ULANG BERSIH** (melepas service worker + mengosongkan cache) atau tambahkan `?nosw=1`. Setelah 9 dtk splash **selalu** menampilkan file mana yang tidak masuk (`#splashHelp`); detailnya di `window.BungBoot` = `{state, missing, slow, done, total, ms}` dan `window.BungBootInline.missing()`. |
+| **Web: `ERR_SOCKET_BAD_PORT … NaN` waktu menjalankan net-server** | Argumen port tidak terbaca (mis. `-- port 8080` dengan spasi). Pakai `--port 8080`, `--port=8080`, `-p 8080`, atau angka polos `8080`; sejak sekarang argumen asing hanya diperingatkan (`ℹ argumen diabaikan`) dan port bentrok diberi pesan, bukan stack trace. |
+| **Web: login/referral tidak jalan** | Backend akun tidak ada: `GET /api/health` harus 200 (pakai `node web/net-server.js`, bukan `python3 -m http.server`). Bonus referral dibayar **setelah** teman mendaftar/masuk, bukan saat link diklik. |
 | Tombol skill tidak muncul / hilang | `UIManager.skills` isinya **2 elemen** (bukan 4): slot 0 = Kamuflase/Radar, slot 1 = Prop Swap/Sonic Blast. Tiap elemen punya `hiderLabel` & `seekerLabel` sendiri, label otomatis berganti sesuai role. `cooldownFill` harus `Image` dengan **Image Type = Filled, Fill Method = Radial**. |
 | Player diam saat dijalankan dari prefab manual | `PhotonView.observed` belum terisi (isi `PlayerController` + `PlayerCombat`), atau `Rigidbody2D` dibuat di child, bukan di root yang sama dengan `PlayerController`. Body Type Kinematic tetap didukung (`MovePosition`). |
 | Nama pemain tidak berubah | `RoomListUI.playerNameInput` belum di-assign. Nama disimpan di `PlayerPrefs["HideSeek.PlayerNick"]` dan dikirim lewat `NetworkManager.SetPlayerName()`. |
@@ -408,7 +411,9 @@ dengan `Assets/Art/HideSeek/**` (disalin ke `web/assets/`).
 ### Jalankan
 
 ```bash
-node web/net-server.js            # port 8790 (bisa: node web/net-server.js 3000)
+node web/net-server.js            # default http://localhost:8790/
+                                    # --port 8080 · --port=8080 · -p 8080 · 8080 semuanya sama;
+                                    # argumen tak dikenal hanya diperingatkan (lihat --help)
 # buka http://localhost:8790/  → tombol MAIN SENDIRI (bots)
 ```
 

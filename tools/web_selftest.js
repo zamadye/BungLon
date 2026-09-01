@@ -698,7 +698,8 @@ const until = (r, pred, dt = 1 / 60, maxSec = 200) => {
     ok('index.html: panel AKUN + kolom kode referral + tombol friend ada',
       /id="accountPanel"/.test(html) && /id="regRef"/.test(html) && /id="addFriendBtn"/.test(html), '');
     ok('index.html memuat apiKit.js SEBELUM game.js',
-      html.indexOf('apiKit.js') > 0 && html.indexOf('apiKit.js') < html.lastIndexOf('game.js'), '');
+      html.indexOf('<script src="apiKit.js">') > 0
+      && html.indexOf('<script src="apiKit.js">') < html.indexOf('<script src="game.js">'), '');
     ok('tidak ada kegagalan di blok [17]', fail === before, fail - before);
   }
 

@@ -29,7 +29,52 @@ try {
   console.log('ℹ akun/referral server: tidak aktif (' + (e && e.code === 'MODULE_NOT_FOUND' ? 'folder server/ tidak ada — mode lokal saja' : e.message) + ')');
 }
 
-const PORT = parseInt(process.argv[2] || process.env.PORT || '8790', 10);
+/**
+ * Argumen baris perintah yang tahan salah ketik:
+ *   --port 8080 · --port=8080 · -p 8080 · p=8080 · 8080 · (kosong = DEFAULT_PORT)
+ * Yang tidak dikenali HANYA diperingatkan. (Gejala lama: `-- port 8080` membuat
+ * parseInt('--') => NaN lalu server.listen melempar ERR_SOCKET_BAD_PORT.)
+ */
+const DEFAULT_PORT = 8790;
+const HOST = '0.0.0.0';
+const HELP = `HideSeek web demo — server statis + relay room + backend akun.
+
+  node web/net-server.js [--port 8080] [--help]
+
+  --port <n>   angka 0..65535 (bisa juga: --port=<n>, -p <n>, atau angka polos "<n>")
+  PORT=<n>     lewat environment
+  tanpa argumen            → http://localhost:${DEFAULT_PORT}/
+
+  /            game (index.html)      /room/*  relay multiplayer
+  /api/*       akun: JWT + referral + Game ID + teman (folder server/ wajib ada)`;
+
+function validPort(n) { return Number.isFinite(n) && Number.isInteger(n) && n >= 0 && n <= 65535; }
+function parseArgs(argv) {
+  const out = { port: null, help: false, ignored: [] };
+  for (let i = 0; i < argv.length; i++) {
+    const a = String(argv[i]);
+    let m = /^-{0,2}(?:port|p)=(.*)$/.exec(a);
+    if (m) { const n = Number(m[1]); if (validPort(n)) out.port = n; else out.ignored.push(a + '=' + m[1]); continue; }
+    m = /^-{0,2}(?:port|p)$/.exec(a);
+    if (m) {
+      const v = argv[i + 1]; i++;
+      const n = Number(v);
+      if (v !== undefined && validPort(n)) out.port = n;
+      else out.ignored.push(a + ' ' + v);
+      continue;
+    }
+    if (/^-{0,2}(?:h|help|\?)$/.test(a)) { out.help = true; continue; }
+    if (/^\d+$/.test(a)) { const n = Number(a); if (validPort(n)) { out.port = n; continue; } }
+    if (a !== '--') out.ignored.push(a);            // '--' = pemisah argumen, aman dibuang
+  }
+  return out;
+}
+
+const ARGS = parseArgs(process.argv.slice(2));
+if (ARGS.help) { console.log(HELP); process.exit(0); }
+const ENV_PORT = Number(process.env.PORT);
+const PORT = ARGS.port != null ? ARGS.port : (validPort(ENV_PORT) ? ENV_PORT : DEFAULT_PORT);
+if (ARGS.ignored.length) console.log('ℹ argumen diabaikan: ' + ARGS.ignored.join(' · ') + `  (pakai --port <angka>, lihat --help)`);
 const ROOT = __dirname;                       // web/
 const LONG_POLL_MS = 20000;                   // timeout tunggu event baru
 const STALE_MS = 45000;                       // pemain dianggap keluar kalau diam
@@ -188,10 +233,21 @@ process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
 
-server.listen(PORT, '0.0.0.0', () => {
+/* Port dipakai/dibatalkan -> pesan yang bisa dibaca, bukan stack trace Node. */
+server.on('error', (e) => {
+  if (e && e.code === 'EADDRINUSE')
+    console.log(`✗ port ${PORT} sudah dipakai (mungkin ada net-server lain yang jalan).\n  coba:  node web/net-server.js --port ${PORT + 1}`);
+  else if (e && e.code === 'EACCES')
+    console.log(`✗ tidak boleh bind port ${PORT} (port < 1024 butuh izin root). Pakai port 3000 atau lebih tinggi.`);
+  else console.log('✗ server gagal jalan: ' + (e && e.message ? e.message : e));
+  process.exit(1);
+});
+
+server.listen(PORT, HOST, () => {
   console.log(`\n  HideSeek web demo  →  http://localhost:${PORT}/
   multiplayer relay  →  /room/create · /room/join · /room/poll   (tanpa dependency)
   ${api ? 'akun + referral    →  /api/health · signup/login JWT, ID game, daftar teman' : 'akun + referral    →  TIDAK aktif (folder server/ tidak ditemukan)'}
   (untuk main sendiri: buka lalu tekan "MAIN SENDIRI (bots)" — tidak perlu server ini)
+  kalau layar loading macet: buka  ?nosw=1  (tanpa service worker) atau tekan MUAT ULANG BERSIH
 `);
 });

@@ -134,7 +134,10 @@ function miniDoc() {
     const used = [...new Set([...gameJs.matchAll(/\$\('([\w-]+)'\)/g)].map(m => m[1]))];
     ok(`${used.length} id dipakai game.js, 0 hilang`, used.every(i => idsHtml.has(i)), used.filter(i => !idsHtml.has(i)));
     ok('stylesheet & script UI dimuat (ui.css, uiKit.js, audioKit.js)',
-      /<link rel="stylesheet" href="ui\.css">/.test(html) && html.indexOf('uiKit.js') < html.indexOf('game.js') && html.indexOf('audioKit.js') < html.indexOf('game.js'));
+      /<link rel="stylesheet" href="ui\.css">/.test(html)
+      && html.indexOf('<script src="uiKit.js">') < html.indexOf('<script src="game.js">')
+      && html.indexOf('<script src="audioKit.js">') < html.indexOf('<script src="game.js">')
+      && html.indexOf('<script src="uiKit.js">') > 0);
   }
 
   /* ============================= [B] uiKit.js ============================== */
@@ -352,7 +355,7 @@ function miniDoc() {
     ok('game.js: level ikut tampil di menu (state terlihat)', /'Lv ' \+ lp\.level/.test(gameJs));
 
     /* ---- 2) partikel canvas + screen shake (blueprint 5.2) ---- */
-    ok('particles.js dimuat sebelum game.js + mengekspor Particles', /<script src="particles\.js"><\/script>/.test(html) && html.indexOf('particles.js') < html.indexOf('game.js') && typeof Particles === 'function');
+    ok('particles.js dimuat sebelum game.js + mengekspor Particles', /<script src="particles\.js"><\/script>/.test(html) && html.indexOf('<script src="particles.js">') < html.indexOf('<script src="game.js">') && typeof Particles === 'function');
     const P = new Particles({ max: 40 });
     ok('emit() menambah partikel sesuai count', P.emit('hit', 0, 0, { count: 12 }) === 12 && P.count === 12, P.count);
     ok('semua resep KINDS punya count/life/speed', ['dust', 'spark', 'hit', 'heal', 'camo', 'ring'].every(k => Particles.KINDS[k] && Particles.KINDS[k].count > 0 && Particles.KINDS[k].life > 0));

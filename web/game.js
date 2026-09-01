@@ -910,6 +910,8 @@ if (typeof document !== 'undefined') (function boot() {
   function settleBoot(state) {
     if (bootSettled) return;
     bootSettled = true;
+    // watchdog inline di index.html berhenti: game.js jelas hidup, tidak perlu panel "terhambat"
+    try { if (typeof window !== 'undefined' && window.BungBootInline) window.BungBootInline.dismiss(); } catch (e) { }
     assetsReady = true;
     BOOT.state = state || 'ready';
     BOOT.ms = Date.now() - BOOT.t0;

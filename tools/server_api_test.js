@@ -410,7 +410,9 @@ async function stopServer() {
     ok('klien menyimpan token & profil di key localStorage yang documented', /hideseek_jwt/.test(kit) && /hideseek_user/.test(kit));
     ok('index.html memuat apiKit.js sebelum game.js', (() => {
       const html = fs.readFileSync(path.join(ROOT, 'web/index.html'), 'utf8');
-      return html.indexOf('apiKit.js') > 0 && html.indexOf('apiKit.js') < html.indexOf('game.js');
+      return html.indexOf('<script src="apiKit.js">') > 0
+        && html.indexOf('<script src="apiKit.js">') < html.indexOf('<script src="game.js">')
+        && html.indexOf('<script src="referralSystem.js">') < html.indexOf('<script src="apiKit.js">');
     })());
     ok('game.js memasang hook akun (login/signup/sync dipanggil)', /BungAPI|apiKit/.test(game) && /account\./.test(game));
     ok('README & integration-guide menyebut backend', /server\/api\.js/.test(fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8')));

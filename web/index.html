@@ -340,6 +340,90 @@
   </div>
 </div>
 
+<script>
+/* =========================================================================================
+   Jaring pengaman boot LAPIS PERTAMA — sengaja ditulis inline di sini supaya tetap jalan
+   walau semua file lain gagal (404, server mati, cache service worker basi). Tidak memakai
+   file/modul apa pun dan tidak boleh melempar exception.
+   Gejala yang dibereskan: layar "MEMUAT…" menggantung selamanya tanpa penjelasan.
+   Bila lapisan game nanti berhasil dimuat (global hideSeekGame ada), ia mengambil alih
+   tombol-tombol ini + memanggil BungBootInline.dismiss() sehingga panel ini tidak muncul.
+   ========================================================================================= */
+(function () {
+  try {
+    var LIMIT = 9000;                                  // ms: setelah ini panel bantuan pasti muncul
+    // basename file -> global yang harus ada bila file-nya benar-benar dieksekusi
+    var NEED = { uiKit: 'BungUI', audioKit: 'BungAudio', particles: 'BungFX', adsManager: 'AdsManager', referralSystem: 'ReferralSystem', apiKit: 'BungAPI', game: 'hideSeekGame' };
+    var t0 = Date.now(), timer = 0, shown = false;
+    function id(x) { return document.getElementById(x); }
+    /** Daftar <script src> yang ada di halaman (tanpa hardcode nama file). */
+    function wanted() {
+      var list = [], tags = document.getElementsByTagName('script');
+      for (var i = 0; i < tags.length; i++) {
+        var s = String(tags[i].getAttribute('src') || '');
+        if (s) list.push(s.replace(/[?#].*$/, '').replace(/^.*\//, '').replace(/\.[a-zA-Z0-9]+$/, ''));
+      }
+      return list;
+    }
+    /** File yang seharusnya sudah memasang global tapi belum = tidak termuat atau error. */
+    function missing() {
+      var w = wanted(), m = [];
+      for (var i = 0; i < w.length; i++) {
+        var k = w[i];
+        if (NEED[k] && !(NEED[k] in window) && m.indexOf(k) < 0) m.push(k);
+      }
+      return m;
+    }
+    function show() {
+      if (shown) return; shown = true;
+      if (timer) { clearInterval(timer); timer = 0; }
+      var m = missing(), e = id('splashErr'), h = id('splashHelp'), sp = id('splashSpinner'), pct = id('splashPct');
+      if (pct) pct.textContent = 'MEMUAT TERHANBAT';
+      if (sp) sp.className = 'spinner slow';
+      if (e) e.innerHTML = m.length
+        ? 'File ini tidak selesai dimuat: <b>' + m.join(', ') + '</b>.<br>Paling sering karena halaman dibuka sebagai file (alamat <b>file://</b>) atau server-nya mati. Jalankan <b>node web/net-server.js</b> lalu buka <b>http://localhost:8790/</b>.'
+        : 'Semua termuat tapi permainan belum mulai — tekan <b>F12</b> (tab Console) untuk melihat error-nya, lalu muat ulang bersih.';
+      if (h) h.className = 'show';
+      var sk = id('splashSkip'), rl = id('splashReload');
+      if (sk) {
+        if (m.length) { sk.textContent = '\u27f3 COBA MUAT ULANG'; sk.onclick = function () { location.reload(); }; }
+        else if (!sk.onclick) sk.onclick = function () {
+          var s = id('splash'); if (s) s.className = 'screen out';
+          var mn = id('menu'); if (mn) mn.className = 'screen on';
+        };
+      }
+      if (rl && !rl.onclick) rl.onclick = function () { wipe(); };
+      try { console.warn('[HideSeek] boot terhambat setelah ' + (Date.now() - t0) + 'ms; file yang belum ada:', m); } catch (err) { }
+    }
+    /** Bongkar service worker + kosongkan cache, lalu muat ulang tanpa cache (penawar "cache basi"). */
+    function wipe() {
+      try {
+        if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) navigator.serviceWorker.getRegistrations().then(function (rs) {
+          for (var i = 0; rs && i < rs.length; i++) { try { rs[i].unregister(); } catch (e) { } }
+        }).catch(function () { });
+      } catch (e) { }
+      try {
+        if (window.caches && caches.keys) caches.keys().then(function (ks) {
+          for (var i = 0; ks && i < ks.length; i++) { try { caches.delete(ks[i]); } catch (e) { } }
+        }).catch(function () { });
+      } catch (e) { }
+      var q = location.search ? (location.search + '&') : '?';
+      location.href = location.pathname + q + 'nosw=1&fresh=' + Date.now();
+    }
+    window.BungBootInline = {
+      t0: t0, missing: missing, show: show, wipe: wipe, protocol: location.protocol,
+      dismiss: function () { shown = true; if (timer) { clearInterval(timer); timer = 0; } }
+    };
+    // dua keadaan yang sudah pasti gagal -> jangan tunggu 9 detik
+    if (location.protocol === 'file:') { show(); }                       // dibuka sebagai file: canvas & fetch diblokir
+    else if (/fresh=|nosw=1/.test(location.search)) { /* mode pemulihan: biarkan apa adanya */ }
+    else timer = setInterval(function () { if (Date.now() - t0 > LIMIT) show(); }, 250);
+    if (timer && timer.unref) timer.unref();           // jangan menahan proses node (dipakai tools/web_boot_harness.js)
+    addEventListener('error', function () { if (!('hideSeekGame' in window)) setTimeout(show, 700); });
+  } catch (e) { /* pengaman tidak boleh menjadi sumber error baru */ }
+})();
+</script>
+
 <!-- konfigurasi (ID iklan TIDAK di repo: web/config.js dihasilkan dari .env) -->
 <script src="config.example.js"></script>
 <script src="config.js" onerror="/* opsional: node tools/gen_web_config.js */"></script>
