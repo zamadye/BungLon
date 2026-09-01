@@ -139,6 +139,12 @@ global.dispatchEventKey = (type, key) => { for (const fn of (winHandlers[type] |
 
 /* ---------- [2b] modul iklan & referral dimuat lebih dulu (persis seperti <script> di index.html) ---------- */
 {
+  for (const f of ['uiKit.js', 'audioKit.js']) {
+    const m = require(path.join(ROOT, 'web/' + f));
+    if (f === 'uiKit.js') global.BungUI = m;
+    else { global.BungAudioKit = m.AudioKit; if (!global.BungAudio) global.BungAudio = new m.AudioKit({}); }
+    ok(f + ' bisa di-require tanpa DOM penuh', !!m);
+  }
   const A = require(path.join(ROOT, 'web/adsManager.js'));
   const R = require(path.join(ROOT, 'web/referralSystem.js'));
   global.AdsManager = A.AdsManager; global.resolveAdsConfig = A.resolveAdsConfig;
@@ -274,6 +280,76 @@ console.log('\n[4] integrasi iklan + referral di HUD');
   ok('game.pause() membekukan langkah ronde', R.t === tBefore, [tBefore, R.t]);
   G.resume(); pump(6);
   ok('game.resume() melanjutkan', R.t > tBefore, R.t);
+  ok('tidak ada kegagalan di blok ini', fail === before, { added: fail - before });
+}
+
+/* ---------- [5] UI v2: layar, pause, setelan, FX, papan skor on-demand ---------- */
+console.log('\n[5] UI v2 (uiKit + audioKit) terpasang di game');
+{
+  const before = fail;
+  const G = global.hideSeekGame, ui = G && G.ui;
+  ok('window.BungUI & window.BungAudio tersedia', !!global.BungUI && !!global.BungAudio, [!!global.BungUI, !!global.BungAudio]);
+  ok('game expose lapisan UI (screens/fx/setPaused/toggleSound)', !!ui && !!ui.screens && !!ui.fx && typeof ui.setPaused === 'function', ui && Object.keys(ui));
+  ok('splash sudah ditutup setelah aset siap', /out/.test(getEl('splash').className), getEl('splash').className);
+  ok('HUD tampil saat ronde', getEl('hud').className === 'on', getEl('hud').className);
+  ok('menu utama tidak tampil saat ronde', !/\bon\b/.test(getEl('menu').className), getEl('menu').className);
+  ok('papan nama pemain terisi', getEl('playerTag').textContent.length > 1, getEl('playerTag').textContent);
+  /* --- jeda (ESC / tombol back) membekukan simulasi tapi tidak render --- */
+  const R = getRound();
+  const t0 = R.t;
+  ui.setPaused(true);
+  ok('pause membuka panel Jeda', /on/.test(getEl('pausePanel').className), getEl('pausePanel').className);
+  ok('HUD disembunyikan saat pause', getEl('hud').className === '', getEl('hud').className);
+  pump(8);
+  ok('langkah ronde dibekukan saat pause', R.t === t0, [t0, R.t]);
+  ok('canvas tetap digambar saat pause (render jalan terus)', stats.drawImage > 0, stats.drawImage);
+  ui.setPaused(false);
+  pump(8);
+  ok('resume menutup panel & ronde jalan lagi', !/on/.test(getEl('pausePanel').className) && R.t > t0 && getEl('hud').className === 'on', [getEl('pausePanel').className, R.t > t0]);
+  /* --- tombol suara (audioKit tanpa AudioContext: hanya preferensi) --- */
+  getEl('soundBtn').dispatch('click', {});
+  ok('klik suara → mode senyap (kelas off + aria-pressed false)', /off/.test(getEl('soundBtn').className) && getEl('soundBtn').getAttribute('aria-pressed') === 'false', [getEl('soundBtn').className, getEl('soundBtn').getAttribute('aria-pressed')]);
+  ok('preferensi suara tersimpan di localStorage', /"sfx":false/.test(global.localStorage.getItem('hideseek_audio')), global.localStorage.getItem('hideseek_audio'));
+  getEl('soundBtn').dispatch('click', {});
+  ok('klik kedua mengaktifkan lagi', !/off/.test(getEl('soundBtn').className), getEl('soundBtn').className);
+  /* --- papan skor on-demand --- */
+  getEl('lbBtn').dispatch('click', {});
+  ok('tombol papan skor membuka overlay', getEl('lbOverlay').className === 'on', getEl('lbOverlay').className);
+  ok('isi papan skor memakai skor resmi (<tr> per pemain)', /<tr/.test(getEl('lbMini').innerHTML), getEl('lbMini').innerHTML.slice(0, 40));
+  getEl('lbBtn').dispatch('click', {});
+  ok('tombol yang sama menutupnya', getEl('lbOverlay').className === '', getEl('lbOverlay').className);
+  /* --- cooldown skill = conic-gradient lewat SkillButton --- */
+  const sk0 = getEl('skills').children[0];
+  ok('tombol skill kelasnya ready/cool', /ready|cool/.test(sk0.className), sk0.className);
+  ok('cincin cooldown memakai conic-gradient', /conic-gradient/.test(sk0.querySelector('.cd').style.background), sk0.querySelector('.cd').style.background);
+  ok('label kunci tombol (1/2 atau Q/E) tampil', /kbd/.test(sk0.innerHTML), sk0.innerHTML.slice(0, 60));
+  /* --- timer: warna saat menipis (blueprint 4.2) --- */
+  R.enterPhase('HIDE'); R.phaseEnd = R.t + 5; pump(1);
+  ok('timer <10s → kelas warn', getEl('timer').className === 'warn', getEl('timer').className);
+  R.enterPhase('SEEK'); R.phaseEnd = R.t + 4; pump(1);
+  ok('5 detik terakhir fase SEEK → urgent', getEl('timer').className === 'urgent', getEl('timer').className);
+  R.phaseEnd = R.t + 40; pump(1);
+  ok('kembali normal saat waktu longgar', getEl('timer').className === '', getEl('timer').className);
+  ok('role pill ikut warna peran', /hider|seeker/.test(getEl('role').className), getEl('role').className);
+  /* --- feedback damage: angka melayang di FX layer --- */
+  const victim = [...R.players.values()].find(p => p.isHider && !p.ghost);
+  const catcher = R.seeker();
+  if (victim && catcher) {
+    victim.invulnUntil = 0; victim.safeUntil = 0; victim.ghost = false; victim.hp = Math.max(1, victim.hp);
+    const fxBefore = getEl('fx').children.length;
+    R.hit(victim.id, catcher.id, true);              // signature: hit(hiderId, seekerId, isContact)
+    ok('kejadian hit → damage number muncul di #fx', getEl('fx').children.length === fxBefore + 1, { before: fxBefore, after: getEl('fx').children.length });
+    const lastFx = getEl('fx').children[getEl('fx').children.length - 1];
+    ok('elemen FX memakai kelas .dmg (animasi rise)', !!lastFx && /dmg/.test(lastFx.className), lastFx && lastFx.className);
+    await sleep(1000);
+    ok('FX dibersihkan otomatis', getEl('fx').children.length === 0, getEl('fx').children.length);
+  } else ok('ada hider + seeker utk uji FX', false, [!!victim, !!catcher]);
+  /* --- setelan --- */
+  getEl('hapticSwitch').dispatch('click', {});
+  ok('switch getar mengubah preferensi + aria-checked', getEl('hapticSwitch').getAttribute('aria-checked') === 'false' && /"haptics":false/.test(String(global.localStorage.getItem('hideseek_ui'))), global.localStorage.getItem('hideseek_ui'));
+  getEl('sfxSwitch').dispatch('click', {});
+  ok('switch SFX tidak melempar tanpa AudioContext', true);
+  ok('deviceInfo siap pakai (diagnosa layar)', typeof getEl('deviceInfo').textContent === 'string', getEl('deviceInfo').textContent);
   ok('tidak ada kegagalan di blok ini', fail === before, { added: fail - before });
 }
 })().catch(e => { console.log('  \x1b[31mEXCEPTION\x1b[0m ' + (e && e.stack || e)); fail++; });

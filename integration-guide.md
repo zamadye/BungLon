@@ -212,9 +212,10 @@ parity + jalur uji. Kalau mau seragam, set `ADS_COOLDOWN_SECONDS=12` di `.env` (
 node web/net-server.js            # http://localhost:8790/  → MAIN SENDIRI (bots)
 node tools/gen_web_config.js      # opsional, dari .env
 node tools/web_selftest.js        # 192 PASS — rules engine 1:1 dengan C#
-node tools/web_dom_smoke.js       #  52 PASS — lapisan browser + integrasi iklan/referral
+node tools/web_dom_smoke.js       #  85 PASS — lapisan browser + integrasi iklan/referral + UI v2
 node tools/web_ads_referral_test.js  # 130 PASS — AdsManager + ReferralSystem + Profile
-cd web && npm test                # ketiganya sekaligus
+node tools/web_ui_test.js         # 153 PASS — uiKit (joystick/cooldown/screens/FX), audioKit, PWA
+cd web && npm test                # keempatnya sekaligus (560 assertion)
 ```
 
 Verifikasi cepat di browser: buka game → tekan `?solo=1` → klik **📺 Dapatkan Koin** → overlay iklan

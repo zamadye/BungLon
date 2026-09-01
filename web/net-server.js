@@ -29,6 +29,9 @@ const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.jpg': 'image/jpeg',
   '.svg': 'image/svg+xml', '.json': 'application/json; charset=utf-8', '.ico': 'image/x-icon',
+  // PWA: peramban menolak manifest bila tipenya bukan application/manifest+json
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
+  '.webp': 'image/webp', '.gif': 'image/gif', '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.woff2': 'font/woff2',
 };
 const code4 = () => {
   const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -148,7 +151,9 @@ const server = http.createServer(async (req, res) => {
   fs.readFile(abs, (err, buf) => {
     if (err) {
       // SPA fallback: file hilang → index.html, tapi beri hint jelas utk asset
-      if (/\.(png|jpg|svg|css|js)$/.test(abs)) { res.writeHead(404, { 'content-type': 'text/plain' }); return res.end('404 ' + file); }
+      if (/\.(png|jpg|jpeg|svg|gif|webp|css|js|json|webmanifest|ico|mp3|ogg|woff2)$/.test(abs)) {
+        res.writeHead(404, { 'content-type': 'text/plain' }); return res.end('404 ' + file);
+      }
       buf = fs.readFileSync(path.join(ROOT, 'index.html'));
       res.writeHead(200, { 'content-type': MIME['.html'] }); return res.end(buf);
     }

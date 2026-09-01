@@ -691,15 +691,48 @@ if (typeof document !== 'undefined') (function boot() {
     'Prop_Table', 'Prop_Chair', 'Prop_FlowerPot', 'Prop_Crate', 'Tile_Grass', 'Tile_Sand', 'Tile_Stone',
     'Tile_Wood', 'Icon_Camouflage', 'Icon_PropSwap', 'Icon_Radar', 'Icon_SonicBlast', 'Icon_Revive', 'Bg_Lobby'];
   const SPR = {}, tintCache = new Map();
-  let pending = names.length, assetsReady = false, tileRgbDone = false;
+  let pending = names.length, assetsReady = false, tileRgbDone = false, loaded = 0;
   // Semua sprite (atau error) sudah datang -> warna tile boleh dihitung.
   const onAll = () => { if (--pending <= 0) { assetsReady = true; startGame(); } };
   for (const n of names) {
     const img = new Image();
-    img.onload = img.onerror = onAll;
+    img.onload = img.onerror = () => { loaded++; splashProgress(loaded); onAll(); };
     img.src = 'assets/' + n + '.png';
     SPR[n] = img;
   }
+  /** Progres loading di splash (blueprint: Splash Screen = logo + indikator). */
+  const SPLASH_TIPS = [
+    'Tekan <span class="kbd">1</span> untuk menyatu dengan lantai.',
+    'Diam di dekat prop lalu tekan <span class="kbd">2</span> = menyamar jadi barang.',
+    'Bergerak saat menyamar jadi prop = samaran batal!',
+    'Seeker pakai <span class="kbd">Q</span> Radar untuk membocorkan posisi 1 detik.',
+    'Sonic Blast (<span class="kbd">E</span>) memperlambat & mendorong hider.',
+    'HP habis? Tonton <b>📺 +1 Nyawa</b> — sekali tiap 30 detik.',
+  ];
+  let splashDone = false, tipIdx = 0;
+  function splashProgress(n) {
+    const pct = Math.round(100 * n / names.length);
+    const bar = $('splashBar'), txt = $('splashPct');
+    if (bar && bar.style) bar.style.width = pct + '%';
+    if (txt) txt.textContent = 'MEMUAT ' + pct + '%';
+    if (pct >= 100) hideSplash();
+  }
+  function hideSplash() {
+    if (splashDone) return; splashDone = true;
+    const el = $('splash'); if (el) el.className = 'screen out';
+    const sp = $('splashSpinner'); if (sp) sp.className = 'spinner done';
+    splashProgress._iv && clearInterval(splashProgress._iv);
+    if (screens && !started) screens.show(queryFlag('solo') === '1' ? 'game' : 'menu');
+  }
+  if (document.addEventListener) {   // tap = skip splash (mobile: jangan bikin orang menunggu)
+    const skip = () => hideSplash();
+    document.addEventListener('pointerdown', skip, { once: true, passive: true });
+  }
+  splashProgress._iv = setInterval(() => {
+    if (splashDone) return;
+    tipIdx = (tipIdx + 1) % SPLASH_TIPS.length;
+    const t = $('splashTip'); if (t) t.innerHTML = 'Tips: ' + SPLASH_TIPS[tipIdx];
+  }, 2600);
 
   function tinted(name, rgb) {
     if (!rgb) return SPR[name];
@@ -754,12 +787,71 @@ if (typeof document !== 'undefined') (function boot() {
   const W2SX = wx => ox + wx * scale, W2SY = wy => oy - wy * scale;
   const SX2W = sx => (sx - ox) / scale, SY2W = sy => (oy - sy) / scale;
 
+  /* ---------- UI kit (uiKit.js) + audio (audioKit.js) — keduanya opsional ---------- */
+  const UI = (typeof window !== 'undefined' && window.BungUI) || null;
+  const AU = (typeof window !== 'undefined' && window.BungAudio) || null;
+  const queryFlag = k => { try { return new URLSearchParams(location.search).get(k); } catch (e) { return null; } };
+  const UI_KEY = 'hideseek_ui';
+  function loadUiPrefs() {
+    try { return Object.assign({ haptics: true, lang: 'id', orient: 'any', lb: false }, JSON.parse(localStorage.getItem(UI_KEY) || '{}') || {}); }
+    catch (e) { return { haptics: true, lang: 'id', orient: 'any', lb: false }; }
+  }
+  const uiPrefs = loadUiPrefs();
+  function saveUiPrefs() { try { localStorage.setItem(UI_KEY, JSON.stringify(uiPrefs)); } catch (e) { } }
+  if (UI && UI.Haptics) UI.Haptics.enabled = uiPrefs.haptics !== false;
+  /** Semua panggilan audio/getar aman: dibungkam kalau script/audio tidak ada. */
+  const sfx = (n, g) => { try { if (AU) AU.sfx(n, g); } catch (e) { /* tanpa AudioContext */ } };
+  const haptic = k => { try { if (UI && UI.Haptics && uiPrefs.haptics !== false) UI.Haptics[k](); } catch (e) { } };
+  /** Pemasangan handler null-safe (id boleh tidak ada di DOM). */
+  function onClick(id, fn) {
+    const el = $(id); if (!el) return false;
+    el.onclick = (e) => { sfx('tap'); haptic('tap'); return fn(e); };
+    return true;
+  }
+  function setCls(id, cls) { const el = $(id); if (el) el.className = cls; }
+  function setTxt(id, v) { const el = $(id); if (el) el.textContent = v; }
+
+  /* layar: splash -> menu -> lobby -> (game) -> result, + modal pause/settings/howto */
+  const SCREEN_NAMES = ['splash', 'menu', 'lobby', 'result', 'pausePanel', 'settingsPanel', 'howtoPanel'];
+  const screens = UI ? new UI.Screens(SCREEN_NAMES, { getElementById: id => $(id), onChange: onScreenChange }) : null;
+  let paused = false;
+  const fx = UI ? new UI.Fx($('fx'), { project: (wx, wy) => ({ x: W2SX(wx) / (DPR || 1), y: W2SY(wy) / (DPR || 1) }) }) : null;
+  if (UI && UI.Viewport) UI.Viewport.init();
+  function showScreen(name) { if (screens) screens.show(name); }
+  /** Musik & visibilitas joystick mengikuti layar aktif. */
+  function onScreenChange(next) {
+    try {
+      if (AU) {
+        if (next === 'game' && !paused) AU.music('game');
+        else if (next === 'menu' || next === 'lobby' || next === 'result') AU.music('menu');
+        else if (next === 'settingsPanel' || next === 'howtoPanel' || next === 'pausePanel') { /* musik jalan terus */ }
+        else AU.stopMusic && AU.stopMusic();
+      }
+      setCls('hud', next === 'game' ? 'on' : '');
+      const j = $('joy'); if (j) j.className = (next === 'game' && coarsePointer()) ? 'on' : '';
+      const back = $('backBtn'); if (back) back.style.visibility = next === 'game' ? '' : 'hidden';
+      const mm = $('minimapWrap'); if (mm) mm.style.visibility = next === 'game' ? '' : 'hidden';
+    } catch (e) { /* UI = progressive enhancement */ }
+  }
+  function coarsePointer() { try { return !!(UI && UI.Viewport && UI.Viewport.info().coarse); } catch (e) { return false; } }
+  /** Jeda manual (ESC / tombol back) — membekukan langkah ronde, bukan rendering. */
+  function setPaused(on) {
+    paused = !!on;
+    if (screens) { paused ? screens.show('pausePanel') : showScreen(ROUND && ROUND.phase !== 'LOBBY' && ROUND.phase !== 'RESULT' ? 'game' : 'menu'); }
+    setCls('hud', paused ? '' : (ROUND ? 'on' : ''));
+    if (AU) { paused ? AU.stopMusic() : (ROUND ? AU.music('game') : AU.music('menu')); }
+    if (joy && joy.reset) joy.reset();
+    return paused;
+  }
+
   /* ---------- toast / HUD ---------- */
   function toast(text, ms = 2200) {
+    const host = $('toasts'); if (!host) return;
+    while (host.children && host.children.length >= 4) { try { host.removeChild(host.children[0]); } catch (e) { break; } }
     const d = document.createElement('div');
     d.className = 'toast'; d.textContent = text;
-    $('toasts').appendChild(d);
-    setTimeout(() => d.remove(), ms);
+    host.appendChild(d);
+    setTimeout(() => { d.className = 'toast out'; setTimeout(() => { try { host.removeChild(d); } catch (e) { d.remove && d.remove(); } }, 240); }, ms);
   }
   const EV_TOAST = {
     camo: e => `${name(e.id)} menyatu dengan lantai`,
@@ -778,27 +870,52 @@ if (typeof document !== 'undefined') (function boot() {
   const name = id => (ROUND && ROUND.players.get(id) ? ROUND.players.get(id).name : '#' + id);
 
   /* ---------- skill buttons (HUD UIManager.CreateSkillButton + radial cooldown) ---------- */
+  const skillBtns = [];
   function buildSkills() {
     const p = ROUND.me();
+    // Blueprint: 4 skill ada, tapi hanya 2 yang relevan per role (HUD minimum).
     const defs = p && !p.isHider
-      ? [['Icon_Radar', 'Radar', 1, 'skill1'], ['Icon_SonicBlast', 'Blast', 2, 'skill2']]
-      : [['Icon_Camouflage', 'Kamuflase', 1, 'skill1'], ['Icon_PropSwap', 'Prop', 2, 'skill2']];
+      ? [['Icon_Radar', 'Radar', 'Q', 'skill1'], ['Icon_SonicBlast', 'Blast', 'E', 'skill2']]
+      : [['Icon_Camouflage', 'Kamuflase', '1', 'skill1'], ['Icon_PropSwap', 'Prop', '2', 'skill2']];
     const box = $('skills');
     if (box.dataset.defs === defs.map(d => d[1]).join(',')) return;
     box.dataset.defs = defs.map(d => d[1]).join(',');
     box.innerHTML = '';
+    skillBtns.length = 0;
     for (const [icon, lbl, hot, field] of defs) {
       const b = document.createElement('div');
-      b.className = 'skill'; b.dataset.field = field;
+      b.className = 'skill ready'; b.dataset.field = field; b.dataset.key = hot;
+      b.setAttribute('aria-label', lbl + ' (tombol ' + hot + ')');
       b.innerHTML = `<img src="assets/${icon}.png" alt=""><div class="cd"></div><div class="lbl">${lbl}<br><span class="kbd">${hot}</span></div>`;
-      b.addEventListener('pointerdown', ev => {
-        ev.preventDefault();
+      const use = () => {
         const me = ROUND.me(); if (!me || me.ghost) return;
         me.input[field] = true;
+        sfx(field === 'skill1' ? (p && !p.isHider ? 'radar' : 'camo') : (p && !p.isHider ? 'blast' : 'swap'));
+        haptic('skill');
+        if (UI) UI.SkillButton.pressFx(b);
         if (ROUND.phase === 'LOBBY' || ROUND.phase === 'RESULT') toast('skill aktif saat ronde berjalan');
-      });
+      };
+      b.addEventListener('pointerdown', ev => { ev.preventDefault(); use(); });
       box.appendChild(b);
+      skillBtns.push(UI ? new UI.SkillButton(b, { cd: b.querySelector('.cd'), field }) : { el: b, cd: b.querySelector('.cd'), render() { } });
     }
+  }
+  function SkillStyle(left, total) {
+    if (UI) return UI.SkillButton.cooldownStyle(left, total);
+    const k = total > 0 ? Math.max(0, Math.min(1, left / total)) : 0;
+    return `conic-gradient(rgba(0,0,0,.78) ${k * 360}deg, transparent ${k * 360}deg)`;
+  }
+  /** Papan skor on-demand (tap ikon di pojok) — versi ringkas dari leaderboard hasil. */
+  function renderMiniBoard() {
+    const el = $('lbMini'); if (!el || !ROUND) return;
+    const rows = [...ROUND.players.values()].sort((a, b) => scoreOf(b) - scoreOf(a));
+    el.innerHTML = rows.map((p, i) => `<tr class="${p.id === ROUND.myId ? 'me' : ''}"><td>${i + 1}</td><td>${p.name}</td>` +
+      `<td>${p.ghost ? '👻' : (p.isHider ? '🦎' : '👁')}${p.isHider ? ' ' + p.hp + 'HP' : ' ' + p.catches + '✋'}</td>` +
+      `<td><b>${scoreOf(p)}</b></td></tr>`).join('');
+  }
+  function scoreOf(p) {
+    if (!p) return 0;
+    return p.isHider ? Math.round(p.survived + p.hp * 10) : p.catches * 30;   // sama dgn GameManager.cs
   }
   function hud() {
     const p = ROUND.me(), seeker = ROUND.seeker();
@@ -816,15 +933,29 @@ if (typeof document !== 'undefined') (function boot() {
     [...hv.children].forEach((el, i) => el.className = 'heart' + (i < hp ? '' : ' off'));
     $('hpFill').style.width = (want ? (hp / want) * 100 : 0) + '%';
     $('hpFill').style.background = hp > 1 ? '#46c06a' : '#ff5d5d';
-    // cooldown radial
-    for (const b of $('skills').children) {
-      if (!p) continue;
-      const isHider = p.isHider;
-      const left = Math.max(0, (isHider ? p.cdHider : p.cdSeeker) - ROUND.t);
-      const total = isHider ? CFG.hiderCd : CFG.seekerCd;
-      b.querySelector('.cd').style.background = `conic-gradient(#000c ${left / total * 360}deg, transparent 0)`;
-      b.className = 'skill ' + (left > 0.02 ? 'cool' : 'ready');
+    // cooldown radial (SkillButton merapikan cincin + kelas ready/cool)
+    const left = p ? Math.max(0, (p.isHider ? p.cdHider : p.cdSeeker) - ROUND.t) : 0;
+    const total = p && p.isHider ? CFG.hiderCd : CFG.seekerCd;
+    for (let i = 0; i < $('skills').children.length; i++) {
+      const b = $('skills').children[i];
+      const btn = skillBtns[i];
+      if (btn && btn.render && btn.el === b) btn.render(left, total);
+      else if (b && b.querySelector) {
+        const cd = b.querySelector('.cd'); if (cd && cd.style) cd.style.background = SkillStyle(left, total);
+        b.className = 'skill ' + (left > 0.02 ? 'cool' : 'ready');
+      }
     }
+    /* --- konteks & feedback (blueprint 4.2) --- */
+    const tl = ROUND.timeLeft;
+    const tv = $('timer'); if (tv) tv.className = (ROUND.phase === 'SEEK' && tl <= 5) ? 'urgent' : (tl < 10 ? 'warn' : '');
+    const rv = $('role'); if (rv) rv.className = UI ? UI.roleClass(p) : '';
+    setTxt('playerTag', (p ? p.name : '—') + (netMode === 'solo' ? '' : ' · ' + netMode));
+    const hitS = ROUND.phase === 'COUNTDOWN' ? Math.ceil(tl) : -1;
+    if (hitS !== hud._sec) {
+      if (hitS >= 0 && hud._sec !== undefined && ROUND.phase === 'COUNTDOWN') { sfx('count'); haptic('tap'); }
+      hud._sec = hitS;
+    }
+    const lbo = $('lbOverlay'); if (lbo && lbo.className === 'on') renderMiniBoard();
     // reward button (RewardOffers.RefreshButtons)
     const off = ROUND.currentOffer(p);
     $('rewardWrap').className = (p && off && !p.isBot) ? 'on' : '';
@@ -941,9 +1072,15 @@ if (typeof document !== 'undefined') (function boot() {
   /* ---------- input: keyboard + joystick + tap ---------- */
   const keys = {};
   addEventListener('keydown', e => {
-    if (e.target && /INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
-    keys[e.key.toLowerCase()] = true;
-    if (e.key === '1') press('skill1'); if (e.key === '2') press('skill2');
+    if (e.target && /INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) { if (e.key === 'Enter' || e.key === 'Escape') e.target.blur(); return; }
+    const k = (e.key || '').toLowerCase();
+    keys[k] = true;
+    // Peta tombol (blueprint 3.3): hider 1/2, seeker Q/E — keduanya selalu diterima.
+    if (k === '1' || k === 'q') press('skill1');
+    if (k === '2' || k === 'e') press('skill2');
+    if (k === 'm') { toggleSound(); return; }
+    if (k === 'l') { toggleBoard(); return; }
+    if (k === 'escape' || k === 'esc') { e.preventDefault(); setPaused(!paused); return; }
     if (e.code === 'Space') { e.preventDefault(); $('soloBtn').click(); }
   });
   addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
@@ -962,15 +1099,19 @@ if (typeof document !== 'undefined') (function boot() {
     const R = () => el.clientWidth / 2;
     const set = (e) => {
       const r = el.getBoundingClientRect();
-      let dx = e.clientX - (r.left + r.width / 2), dy = e.clientY - (r.top + r.height / 2);
-      const m = Math.hypot(dx, dy) || 1, lim = r.width / 2;
-      const k = Math.min(1, m / lim);
-      joy.dx = dx / m * k; joy.dy = -dy / m * k;
-      knob.style.transform = `translate(calc(-50% + ${dx / m * k * lim}px), calc(-50% + ${dy / m * k * lim}px))`;
+      let vx = e.clientX - (r.left + r.width / 2), vy = e.clientY - (r.top + r.height / 2);
+      // deadzone + vektor ternormalisasi dari uiKit (sama seperti hud-gamepad)
+      const v = UI ? UI.Joystick.computeVector(e.clientX, e.clientY, r, 0.14)
+        : (() => { const m = Math.hypot(vx, vy) || 1, lim = Math.max(1, r.width / 2), k = Math.min(1, m / lim); return { dx: vx / m * k, dy: -vy / m * k, mag: m }; })();
+      joy.dx = v.dx; joy.dy = v.dy;
+      const lim = r.width / 2, ang = Math.atan2(vy, vx), rr = Math.min(1, v.mag || 0) * lim * 0.5;
+      knob.style.transform = `translate(calc(-50% + ${Math.cos(ang) * rr}px), calc(-50% + ${Math.sin(ang) * rr}px))`;
+      if (!joy.moved && (Math.abs(v.dx) > 0.05 || Math.abs(v.dy) > 0.05)) { joy.moved = true; haptic('tap'); }
     };
-    el.addEventListener('pointerdown', e => { e.preventDefault(); el.setPointerCapture(e.pointerId); joy.active = true; joy.id = e.pointerId; set(e); });
+    el.addEventListener('pointerdown', e => { e.preventDefault(); el.setPointerCapture(e.pointerId); joy.active = true; joy.id = e.pointerId; joy.moved = false; el.className = 'on active'; set(e); });
     el.addEventListener('pointermove', e => { if (joy.active && e.pointerId === joy.id) set(e); });
-    const end = e => { if (e.pointerId !== joy.id) return; joy.active = false; joy.dx = joy.dy = 0; knob.style.transform = 'translate(-50%,-50%)'; };
+    const end = e => { if (e.pointerId !== joy.id) return; joy.active = false; joy.dx = joy.dy = 0; knob.style.transform = 'translate(-50%,-50%)'; el.className = 'on'; };
+    joy.reset = () => { joy.active = false; joy.dx = joy.dy = 0; if (knob && knob.style) knob.style.transform = 'translate(-50%,-50%)'; };
     el.addEventListener('pointerup', end); el.addEventListener('pointercancel', end);
   })();
 
@@ -1006,11 +1147,17 @@ if (typeof document !== 'undefined') (function boot() {
   };
   const gameAPI = {
     player: playerAPI, profile,
-    pause() { metaPaused = true; $('pauseTag').className = 'on'; },
-    resume() { metaPaused = false; $('pauseTag').className = ''; },
+    pause() { metaPaused = true; $('pauseTag').className = 'on'; try { AU && AU.duck(true); } catch (e) { } },
+    resume() { metaPaused = false; $('pauseTag').className = ''; try { AU && AU.duck(false); } catch (e) { } },
     saveGame() { profile.save(); },
     updateUI() { updateUI(); },
     ads: null, referral: null,          // diisi setelah keduanya dibuat (debug + test)
+    /* lapisan UI v2 — juga dipakai tools/web_dom_smoke.js (grup [5]) */
+    ui: {
+      get screens() { return screens; }, get fx() { return fx; }, get UI() { return UI; }, get audio() { return AU; },
+      get paused() { return paused; }, setPaused, toggleSound, toggleBoard, showScreen, renderMiniBoard,
+      prefs: uiPrefs, savePrefs: saveUiPrefs,
+    },
   };
   window.hideSeekGame = gameAPI;                 // debugging: hideSeekGame.player.addCoins(999)
 
@@ -1048,7 +1195,7 @@ if (typeof document !== 'undefined') (function boot() {
     let settled = false;
     const finish = (okFlag) => {
       if (settled) return; settled = true; adBusy = false;
-      if (okFlag === true) { profile.noteAdReward(); if (onReward) onReward(); }
+      if (okFlag === true) { profile.noteAdReward(); sfx('reward'); haptic('win'); if (onReward) onReward(); }
       updateUI();
     };
     if (ads) {
@@ -1099,6 +1246,11 @@ if (typeof document !== 'undefined') (function boot() {
     $('buyLifeBtn').textContent = `+1 Nyawa — ${profile.cfg.lifePrice} 🪙`;
     $('buyLifeBtn').disabled = c < profile.cfg.lifePrice;
     $('adLifeBtn').disabled = adBusy; $('adCoinsBtn').disabled = adBusy; $('inviteBtn').disabled = !referral;
+    // menu utama: ringkasan progres (biar "state selalu terlihat" juga di luar ronde)
+    setTxt('coinsMenu', '🪙 ' + profile.coins);
+    setTxt('bestTag', 'rekor: ' + profile.best + ' · ronde: ' + profile.rounds);
+    const sb = $('soundBtn');
+    if (sb) { const muted = AU && AU.prefs && (!AU.prefs.sfx && !AU.prefs.music); sb.className = 'iconbtn' + (muted ? ' off' : ''); sb.setAttribute('aria-pressed', muted ? 'false' : 'true'); }
     if (ROUND) hud();
   }
   /* Tombol "Tonton Iklan +1 Nyawa" / "Dapatkan Koin" (sesuai spesifikasi adsManager). */
@@ -1118,11 +1270,100 @@ if (typeof document !== 'undefined') (function boot() {
   };
   updateUI();
 
+  /* ============================================================================
+   * UI v2 — layar, pause, setelan, suara, papan skor on-demand
+   * ========================================================================== */
+  /** Suara on/off (tombol di pojok kanan-atas + tombol M). */
+  function toggleSound(force) {
+    if (!AU) { toast('audioKit.js belum dimuat'); return false; }
+    try { AU.unlock(); } catch (e) { }
+    const on = force === undefined ? !(AU.prefs.sfx || AU.prefs.music) : !!force;
+    AU.setMuted('sfx', on); AU.setMuted('music', on);
+    toast(on ? '🔊 suara aktif' : '🔇 suara dimatikan');
+    updateUI();
+    return on;
+  }
+  /** Papan skor on-demand (ikon batang di kanan-atas / tombol L). */
+  function toggleBoard(force) {
+    const el = $('lbOverlay'); if (!el) return false;
+    const on = force === undefined ? el.className !== 'on' : !!force;
+    el.className = on ? 'on' : '';
+    if (on) renderMiniBoard();
+    return on;
+  }
+  onClick('soundBtn', () => toggleSound());
+  onClick('lbBtn', () => toggleBoard());
+  onClick('lbClose', () => toggleBoard(false));
+  onClick('backBtn', () => { if (ROUND && ROUND.phase !== 'LOBBY') setPaused(true); else showScreen('menu'); });
+
+  /* ---- menu utama ---- */
+  onClick('playBtn', () => { startGameSoft(); $('soloBtn').click(); if (screens) screens.show('game'); hideSplash(); });
+  onClick('multiBtn', () => { startGameSoft(); showScreen('lobby'); const n = $('nameInput'); n && n.focus && n.focus(); });
+  onClick('howtoBtn', () => screens && screens.show('howtoPanel'));
+  onClick('settingsBtn', () => screens && screens.show('settingsPanel'));
+  onClick('lobbyBackBtn', () => { showScreen('menu'); if (AU) AU.music('menu'); });
+  onClick('resultMenuBtn', () => { $('result').className = 'panel hidden'; showScreen('menu'); });
+  onClick('closeHowtoBtn', () => showScreen(paused ? 'pausePanel' : (screens && screens.current === 'game' ? 'game' : 'menu')));
+  onClick('closeSettingsBtn', () => showScreen(paused ? 'pausePanel' : (screens && screens.current === 'game' ? 'game' : 'menu')));
+
+  /* ---- pause (ESC / tombol back) ---- */
+  onClick('resumeBtn', () => setPaused(false));
+  onClick('pauseSettingsBtn', () => screens && screens.show('settingsPanel'));
+  onClick('restartBtn', () => { setPaused(false); ROUND && ROUND.start(true); });
+  onClick('quitBtn', () => { setPaused(false); net = null; netMode = 'solo'; setCls('netMode', ''); setTxt('netMode', 'SOLO (bots)'); $('result').className = 'panel hidden'; setCls('hud', ''); showScreen('menu'); });
+  if (screens) screens.escapeToPause = () => setPaused(true);   // Screens.back() dari layar game = pause
+
+  /* ---- setelan: switch, volume, orientasi, bahasa ---- */
+  function bindSwitch(id, get, set) {
+    const el = $(id); if (!el) return;
+    const paint = () => el.setAttribute('aria-checked', get() ? 'true' : 'false');
+    const flip = () => { set(!get()); paint(); sfx('tap'); haptic('tap'); updateUI(); };
+    el.onclick = flip;
+    el.addEventListener && el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); flip(); } });
+    paint(); bindSwitch._paint = (bindSwitch._paint || []).concat(paint);
+  }
+  bindSwitch('sfxSwitch', () => !AU || AU.prefs.sfx, v => { try { AU && AU.unlock(); AU && AU.setMuted('sfx', v); } catch (e) { } });
+  bindSwitch('musicSwitch', () => !AU || AU.prefs.music, v => {
+    try {
+      if (!AU) return; AU.unlock(); AU.setMuted('music', v);
+      v ? AU.music(paused ? 'menu' : (screens && screens.current === 'game' ? 'game' : 'menu')) : AU.stopMusic();
+    } catch (e) { }
+  });
+  bindSwitch('hapticSwitch', () => uiPrefs.haptics !== false, v => { uiPrefs.haptics = v; if (UI && UI.Haptics) UI.Haptics.enabled = v; saveUiPrefs(); if (v) haptic('tap'); });
+  (function bindVolume() {
+    const r = $('volumeRange'); if (!r) return;
+    r.value = String(Math.round(((AU && AU.prefs.volume) || 0.8) * 100));
+    const on = () => { try { AU && AU.unlock(); AU && AU.setVolume(Number(r.value) / 100); } catch (e) { } };
+    r.oninput = r.onchange = on; on();
+  })();
+  onClick('orientBtn', () => { });
+  (function bindOrientLang() {
+    const o = $('orientSel');
+    if (o) {
+      o.value = uiPrefs.orient || 'any';
+      o.onchange = () => {
+        uiPrefs.orient = o.value; saveUiPrefs();
+        if (UI && UI.Viewport && o.value !== 'any') UI.Viewport.lock(o.value);
+        toast('orientasi: ' + o.value + (o.value === 'any' ? ' (ikuti perangkat)' : ' — tidak semua browser mengizinkan'));
+        resize();
+      };
+    }
+    const l = $('langSel');
+    if (l) {
+      l.value = uiPrefs.lang || 'id';
+      l.onchange = () => { uiPrefs.lang = l.value; saveUiPrefs(); toast(l.value === 'en' ? 'UI English label belum lengkap — game tetap bahasa Indonesia' : 'bahasa: Indonesia'); };
+    }
+    const d = $('deviceInfo');
+    if (d && UI && UI.Viewport) { const i = UI.Viewport.info(); d.textContent = `layar ${i.w}×${i.h} · dpr ${i.dpr} · ${i.portrait ? 'portrait' : 'landscape'}${i.coarse ? ' · sentuh' : ' · mouse'}`; }
+  })();
+  if (screens && screens.names) screens.show(queryFlag('solo') === '1' ? 'game' : (queryFlag('room') === '1' ? 'lobby' : 'menu'));
+
   /* ---------- loop utama ---------- */
   let last = performance.now();
   function frame(t) {
     const dt = Math.min(0.05, (t - last) / 1000); last = t;
     if (metaPaused) { return requestAnimationFrame(frame); }        // iklan tayang -> beku
+    if (paused) { if (ROUND) draw(); return requestAnimationFrame(frame); }   // menu jeda -> bekukan simulasi
     if (ROUND && netMode !== 'client') { keyInput(); ROUND.step(dt); }
     else if (ROUND) { keyInput(); ROUND.t += dt; ROUND.tickPhaseClient?.(); }
     if (ROUND) { buildSkills(); hud(); draw(); }
@@ -1161,7 +1402,10 @@ if (typeof document !== 'undefined') (function boot() {
         const me = ROUND.me();
         if (me) {
           const gained = profile.finishRound(me.score | 0);
-          if (gained > 0) toast(`🪙 +${gained} koin (skor ${me.score})`, 3200);
+          if (gained > 0) {
+            toast(`🪙 +${gained} koin (skor ${me.score})`, 3200); sfx('coin');
+            if (fx) fx.damage(me.x, me.y, '+' + gained + ' 🪙', 'coin');
+          }
           updateUI();
         }
       }
@@ -1171,13 +1415,34 @@ if (typeof document !== 'undefined') (function boot() {
       }
       if (e.type === 'phase' && e.name !== lastPhase) {
         lastPhase = e.name;
-        if (e.name === 'COUNTDOWN') { $('result').className = 'panel hidden'; clearInterval(showResult._iv); }
+        if (e.name === 'COUNTDOWN') { $('result').className = 'panel hidden'; clearInterval(showResult._iv); if (screens) screens.show('game'); }
         else if (e.name === 'SEEK') toast('SEEKER MASUK — jangan tersentuh!', 2600);
         else if (e.name === 'HIDE') toast('FASE BERSEMBUNYI (' + CFG.hide + 's)', 2200);
       }
       const f = EV_TOAST[e.type]; if (f) toast(f(e), e.type === 'blast' ? 1400 : 1800);
+      /* --- feedback instan: suara + angka melayang + kilat layar (blueprint 1.1) --- */
+      const at = e.id != null ? ROUND.players.get(e.id) : null;
+      switch (e.type) {
+        case 'hit':
+          sfx('hit'); haptic('catchHit');
+          if (fx && at) fx.damage(at.x, at.y, '-1 ♥', '');
+          if (e.id === ROUND.myId && fx) fx.flash($('stage'), 'hit');
+          break;
+        case 'blast': sfx('blast'); haptic('hit'); break;
+        case 'radar': sfx('radar'); break;
+        case 'prop': sfx('swap'); if (fx && at) fx.damage(at.x, at.y, 'prop!', 'info'); break;
+        case 'propCancel': sfx('skill'); break;
+        case 'camo': sfx('camo'); if (fx && at) fx.damage(at.x, at.y, 'camo', 'info'); if (e.id === ROUND.myId && fx) fx.flash($('stage'), 'camo'); break;
+        case 'ghost': sfx('ghost'); haptic('lose'); if (fx && at) fx.damage(at.x, at.y, '💀', ''); break;
+        case 'revive': sfx('reward'); if (fx && at) fx.damage(at.x, at.y, '+1 ♥', 'heal'); break;
+        case 'slow': sfx('hit', 0.6); break;
+        case 'frenzy': sfx('go'); if (fx && at) fx.damage(at.x, at.y, 'FRENZY', 'coin'); break;
+      }
+      if (e.type === 'phase' && (e.name === 'HIDE' || e.name === 'SEEK')) sfx('go');
     });
-    $('hud').className = 'on';
+    /* Jangan buka HUD dulu: loader sprite memanggil startGame() sebelum ada ronde.
+       Layar 'game' aktif lewat event fase (COUNTDOWN/HIDE) di bawah. */
+    if (screens) onScreenChange(screens.current); else hideSplash();
     requestAnimationFrame(frame);
   }
 
@@ -1193,9 +1458,22 @@ if (typeof document !== 'undefined') (function boot() {
     }
   }
 
+  /** True bila baris hasil yang menandai kita menang (dipakai utk warna judul + SFX). */
+  function isOnMySide(r) {
+    const me = r && r.board && r.board.find(b => b.me);
+    if (!me) return !!r && r.hidersWin;
+    return r.hidersWin ? me.role === 'HIDER' : me.role === 'SEEKER';
+  }
   function showResult(r) {
     $('result').className = 'panel';
+    const win = isOnMySide(r);
     $('resultTitle').textContent = r.hidersWin ? 'HIDERS MENANG' : 'SEEKER MENANG';
+    $('resultTitle').className = win ? 'win' : 'lose';
+    sfx(win ? 'win' : 'lose'); haptic(win ? 'win' : 'lose');
+    if (AU) { try { AU.music('menu'); } catch (e) { } }
+    if (screens) screens.show('result');
+    const mvp = r.lastHider || (r.board && r.board[0]);
+    setTxt('mvpName', mvp ? (`MVP: ${mvp.name || mvp.name_ || ''} — ${mvp.score != null ? mvp.score + ' poin' : 'bertahan paling lama'}`) : '—');
     $('resultDetail').innerHTML = r.hidersWin
       ? `Semua hider tertangkap? tidak — ${r.board.filter(b => b.role === 'HIDER' && !b.ghost).length} hider selamat. ${r.lastHider ? '<b>Hider terakhir yang hidup: ' + r.lastHider.name + '</b> (pemenang)' : ''}`
       : `Semua hider tertangkap (${r.totalCaught}) oleh ${name(ROUND.seekerId)}.`;
@@ -1209,8 +1487,8 @@ if (typeof document !== 'undefined') (function boot() {
     }, 500);
   }
 
-  $('againBtn').onclick = () => { $('result').className = 'panel hidden'; ROUND.start(true); };
-  $('lobbyBtn').onclick = () => { $('result').className = 'panel hidden'; };
+  $('againBtn').onclick = () => { $('result').className = 'panel hidden'; if (screens) screens.show('game'); ROUND.start(true); sfx('go'); };
+  $('lobbyBtn').onclick = () => { $('result').className = 'panel hidden'; showScreen('lobby'); if (AU) { try { AU.music('menu'); } catch (e) { } } };
   $('rewardBtn').onclick = () => { const p = ROUND.me(), o = ROUND.currentOffer(p); if (o) ROUND.redeem(o.key); };
 
   $('soloBtn').onclick = () => {
@@ -1218,8 +1496,11 @@ if (typeof document !== 'undefined') (function boot() {
     localStorage.setItem('hs_name', $('nameInput').value);
     netMode = 'solo'; $('netMode').textContent = 'SOLO (bots)';
     $('lobby').className = 'panel hidden';
+    if (screens) screens.show('game');
+    hideSplash();
     fillWithBots(parseInt($('sizeSel').value, 10) || 6);
     ROUND.start(true);
+    sfx('go');
     toast('fase HIDE 30 detik — pakai skill Kamuflase / Prop Swap');
   };
   function startGameSoft() { startGame(); $('titleFallback').style.display = 'none'; }
@@ -1303,7 +1584,7 @@ if (typeof document !== 'undefined') (function boot() {
   $('hostBtn').onclick = () => hostRoom().catch(e => toast('gagal buat room: ' + e.message + ' (jalankan: node web/net-server.js)'));
   $('joinBtn').onclick = () => joinRoom().catch(e => toast('gagal gabung: ' + e.message));
   $('startBtn').onclick = () => { if (netMode === 'host') { syncRoster(); ROUND.start(true); } };
-  $('leaveBtn').onclick = () => { net = null; netMode = 'solo'; $('roomRow').style.display = 'none'; $('lobby').className = 'panel'; };
+  $('leaveBtn').onclick = () => { net = null; netMode = 'solo'; $('roomRow').style.display = 'none'; $('lobby').className = 'panel'; showScreen('lobby'); };
   if (location.hostname) resize();
   // auto-start saat ?solo=1 (dipakai juga oleh pengecekan visual)
   if (new URLSearchParams(location.search).get('solo') === '1') $('soloBtn').click();

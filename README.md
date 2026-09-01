@@ -78,7 +78,7 @@ Tools/hideseek_art_postprocess.py   (keying/segmentasi/resize PNG art, hanya pil
 > **Tidak punya Unity sekarang?** Ada build web (HTML5 canvas) yang memakai aturan & sprite yang
 > sama: `node web/net-server.js` → buka `http://localhost:8790` → **MAIN SENDIRI (bots)**.
 > Detail + cara uji: **bagian 10**. Build web = demo/prototipe; rilis Play Store tetap lewat Unity.
-> Test otomatis: `node tools/web_selftest.js` (192 assertion: konstanta C# == aturan web).
+> Test otomatis: `node tools/web_selftest.js` (192 assertion: konstanta C# == aturan web) · `npm test` di `web/` menjalankan 4 suite (560 assertion).
 
 ---
 
@@ -393,6 +393,34 @@ Yang sengaja **tidak** ada di build web: Photon room browser/lobby typed, anti-c
 dan SDK iklan asli (Unity Ads). Build web dipakai untuk: validasi aturan, tuning angka,
 preview art, dan test multiplayer 2 device di browser.
 
+### UI/UX v2 (blueprint: zoning, glassmorphism, 44px, audio, PWA)
+
+Build web sekarang punya lapisan UI sendiri — semua vanilla, **tanpa npm/Phaser**
+(`hud-gamepad`, `@toolcase/game-components`, Enclave template diganti implementasi lokal):
+
+| File | Isi |
+|---|---|
+| `web/ui.css` | design system: token warna (hijau=aman/hider, oranye=koin & reward, ungu=seeker/bahaya, merah=damage), glassmorphism (`backdrop-filter`), `--tap:44px`, `env(safe-area-inset-*)`, media query portrait **dan** landscape, `prefers-reduced-motion` / `prefers-contrast` / `:focus-visible` |
+| `web/uiKit.js` | `Joystick` (pad 120px + deadzone + vektor ternormalisasi), `SkillButton` (cincin cooldown `conic-gradient`), `Screens` (splash → menu → lobby → game → result + pause), `Fx` (damage number + kilat layar), `Viewport` (safe-area/orientasi), `Haptics` (`navigator.vibrate`) |
+| `web/audioKit.js` | SFX + BGM **disintesis Web Audio** (0 file audio): `tap hit catch skill camo swap radar blast coin reward count go win lose join err`; BGM menu vs game beda tempo; `duck()` saat iklan; preferensi di `localStorage['hideseek_audio']` |
+| `web/index.html` | zoning blueprint: TL back+nama · TC fase+timer+role+hint+countdown · TR suara+papan skor+minimap · BC HP+reward · BR skill+dock iklan/referral · BL joystick; layar Splash, Main Menu, Lobby, HUD, Pause, Result, Settings, How-to-Play |
+| `web/manifest.webmanifest` + `web/sw.js` | PWA: Add to Home Screen, offline (app-shell precache), shortcut Solo/Room. Matikan SW: `?nosw=1` |
+
+Perilaku baru yang terlihat:
+
+* **Kontrol**: WASD + `1`/`2` (hider) atau `Q`/`E` (seeker), `Space` mulai, `M` suara, `L` papan skor, `Esc` pause.
+* **Ukuran sentuh** semua tombol ≥ 44px; joystick hanya muncul di perangkat sentuh (`hover:none`).
+* **Feedback**: angka damage/heal/koin melayang di posisi pemain, kilat merah saat tertangkap, kilat hijau saat camo, getar (`vibrate`), tombol skill berdenyut saat siap, timer memerah < 10 dtk (`warn`) dan blok merah di 5 dtk terakhir (`urgent`).
+* **Splash** menampilkan progres muat sprite per aset + tips berganti; tap = lewati.
+* **Papan skor on-demand** (ikon batang) memakai rumus skor resmi (`30/tangkap`, `detik + 10/HP`).
+* **Setelan**: SFX / musik / haptik / volume / orientasi (Screen Orientation API, boleh ditolak browser) / bahasa (kerangka) + baris diagnosa `layar 393×851 · dpr 3 · portrait · sentuh`.
+
+Yang **sengaja** menyimpang dari blueprint: 4 skill tidak ditampilkan sekaligus (2 per role, sesuai `UIManager` Unity — HUD minimum); chat/event log digabung ke toast; ikon back/sound/papan skor memakai SVG inline (tajam di semua DPI, tanpa aset baru); aset audio digantikan sintesis supaya tetap nol-file dan offline-able.
+
+```bash
+node tools/web_ui_test.js    # 153 assertion: blueprint -> CSS/HTML, uiKit, audioKit, manifest/SW
+```
+
 ### Iklan rewarded (AppLixir/AdinPlay) + referral di build web
 
 Dua modul vanilla JS, tanpa dependency — detail lengkap ada di **[`integration-guide.md`](integration-guide.md)**.
@@ -406,7 +434,7 @@ Dua modul vanilla JS, tanpa dependency — detail lengkap ada di **[`integration
 
 ```bash
 node tools/web_ads_referral_test.js   # 130 assertion: cooldown, fallback, ?ref=, hadiah
-node tools/web_dom_smoke.js           # blok [4]: klik tombol iklan/referral di DOM tiruan
+node tools/web_dom_smoke.js           #  85 PASS: lapisan browser + blok [4] iklan/referral + blok [5] UI v2
 ```
 
 Saat iklan tayang, `game.pause()` dipanggil (loop `step()` dibekukan, ada label **IKLAN**), lalu

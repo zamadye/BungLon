@@ -1,0 +1,27 @@
+{
+  "name": "BUNGLON! — Hide & Seek (web demo)",
+  "short_name": "BUNGLON",
+  "description": "Hide & seek multiplayer berbasis kamuflase. Build web HTML5: aturan 1:1 dengan versi Unity, rewarded ads + referral, tanpa install.",
+  "id": "com.hideseek.webdemo",
+  "start_url": "./index.html?src=pwa",
+  "scope": "./",
+  "display": "fullscreen",
+  "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
+  "orientation": "any",
+  "background_color": "#050d0a",
+  "theme_color": "#050d0a",
+  "lang": "id",
+  "dir": "ltr",
+  "categories": ["games", "entertainment"],
+  "icons": [
+    { "src": "assets/AppIcon.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "assets/AppIcon.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "assets/AppIcon.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Main solo (bots)", "short_name": "Solo", "url": "./index.html?solo=1", "icons": [{ "src": "assets/AppIcon.png", "sizes": "192x192" }] },
+    { "name": "Buat room", "short_name": "Room", "url": "./index.html?room=1", "icons": [{ "src": "assets/AppIcon.png", "sizes": "192x192" }] }
+  ],
+  "protocol_handlers": [],
+  "prefer_related_applications": false
+}

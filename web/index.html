@@ -2,207 +2,257 @@
 <html lang="id">
 <head>
 <meta charset="utf-8">
+<title>BUNGLON! — Hide &amp; Seek</title>
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<meta name="theme-color" content="#0d1a14">
-<title>HideSeek Online — Web Demo (tanpa Unity)</title>
+<meta name="theme-color" content="#050d0a">
+<meta name="description" content="BUNGLON! — hide & seek multiplayer berbasis kamuflase. Build web HTML5 (aturan sama dengan versi Unity), tanpa install.">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="BUNGLON">
 <link rel="icon" href="assets/AppIcon.png">
-<style>
-/* Layout 1:1 dengan panel yang dibuat HideSeekSetupTool (BuildCanvas):
-   LobbyPanel / HudPanel / CountdownOverlay / ResultPanel. */
-*{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
-html,body{margin:0;height:100%;background:#08110d;color:#eaf3ec;
-  font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow:hidden;touch-action:none;user-select:none}
-canvas{display:block;image-rendering:auto}
-#stage{position:fixed;inset:0}
-#game{width:100%;height:100%}
-.panel{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;
-  padding:20px;text-align:center;background:#060e0bee url(assets/Bg_Lobby.png) center/cover no-repeat;
-  box-shadow:inset 0 0 0 2000px rgba(6,14,11,.78)}
-.panel.hidden{display:none}
-.panel h1{font-size:clamp(26px,6.4vw,54px);margin:0;letter-spacing:2px;text-shadow:0 4px 0 #00000055}
-.panel h1 small{display:block;font-size:.38em;letter-spacing:3px;color:#9fb3a6;margin-top:8px;font-weight:600}
-.logo{max-width:min(520px,86vw);width:100%;border-radius:18px;box-shadow:0 12px 40px #0009}
-.row{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;align-items:center}
-input,select,button{font:inherit;color:#0d1a14;background:#f2f7f3;border:0;border-radius:12px;padding:12px 16px;min-width:0}
-input,select{background:#ffffffe6}
-button{background:#2fa35b;color:#fff;font-weight:800;letter-spacing:.6px;cursor:pointer;box-shadow:0 4px 0 #1c6b3a}
-button:active{transform:translateY(3px);box-shadow:0 1px 0 #1c6b3a}
-button.alt{background:#2b6ba8;box-shadow:0 4px 0 #1b4a75}
-button.gold{background:#d98d16;box-shadow:0 4px 0 #9a6207}
-button.ghostbtn{background:#4c5a53;box-shadow:0 4px 0 #33403a}
-button:disabled{opacity:.45;box-shadow:none;cursor:default}
-.note{color:#9fb3a6;font-size:13px;max-width:560px;line-height:1.5}
-.kbd{background:#ffffff22;border-radius:6px;padding:1px 6px;font-family:ui-monospace,Menlo,monospace;font-size:12px}
-table{border-collapse:collapse;min-width:min(460px,92vw);font-size:14px}
-td,th{padding:7px 9px;border-bottom:1px solid #ffffff1a;text-align:left}
-th{color:#9fb3a6;font-weight:600;font-size:12px;letter-spacing:1px;text-transform:uppercase}
-tr.me td{background:#2fa35b22;font-weight:800}
-
-/* ---- HUD (seperti HudPanel di UIManager) ---- */
-#hud{position:absolute;inset:0;pointer-events:none;display:none}
-#hud.on{display:block}
-.hudTop{position:absolute;top:8px;left:0;right:0;text-align:center;text-shadow:0 3px 0 #000a}
-#phase{font-size:clamp(13px,2.4vw,19px);letter-spacing:4px;color:#bfe6c9;font-weight:800}
-#timer{font-size:clamp(38px,8vw,76px);font-weight:900;line-height:1;font-variant-numeric:tabular-nums}
-#role{font-size:clamp(12px,2.2vw,17px);color:#ffd77a;font-weight:800;letter-spacing:1px}
-#hint{font-size:12px;color:#9fb3a6}
-#hpWrap{position:absolute;left:14px;top:14px;display:flex;flex-direction:column;gap:6px;align-items:flex-start}
-#hearts{display:flex;gap:5px}
-.heart{width:22px;height:22px;background:#ff5d5d;clip-path:polygon(50% 100%,0 45%,12% 12%,50% 32%,88% 12%,100% 45%);}
-.heart.off{background:#ffffff2e}
-#hpBar{width:150px;height:9px;background:#ffffff26;border-radius:9px;overflow:hidden}
-#hpFill{height:100%;width:100%;background:#46c06a;transition:width .18s}
-#skills{position:absolute;right:12px;bottom:14px;display:flex;gap:12px;pointer-events:auto}
-.skill{position:relative;width:clamp(62px,15vw,92px);height:clamp(62px,15vw,92px);border-radius:50%;
-  background:#123328cc;border:2px solid #ffffff2a;display:flex;align-items:flex-end;justify-content:center;
-  color:#cfe9d6;font-size:10px;font-weight:800;letter-spacing:.4px;overflow:hidden;cursor:pointer}
-.skill img{position:absolute;top:12%;left:50%;transform:translateX(-50%);width:46%;height:46%;object-fit:contain}
-.skill .cd{position:absolute;inset:0;background:#000a;
-  -webkit-mask:radial-gradient(closest-side,transparent 58%,#000 59%);mask:radial-gradient(closest-side,transparent 58%,#000 59%)}
-.skill .lbl{padding-bottom:8px;text-align:center;line-height:1.05}
-.skill.ready{border-color:#46c06a99}
-.skill.cool{opacity:.9}
-#minimapWrap{position:absolute;right:12px;top:12px;width:clamp(96px,22vw,168px);aspect-ratio:17/11;
-  background:#04100ccc;border:1px solid #ffffff22;border-radius:10px;overflow:hidden}
-#minimap{width:100%;height:100%}
-#toasts{position:absolute;left:50%;top:22%;transform:translateX(-50%);display:flex;flex-direction:column;gap:6px;align-items:center}
-.toast{background:#000000bb;border:1px solid #ffffff2a;border-radius:10px;padding:7px 13px;font-size:13px;white-space:nowrap;
-  animation:pop .18s ease-out}
-@keyframes pop{from{transform:scale(.86);opacity:0}to{transform:scale(1);opacity:1}}
-#rewardWrap{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);pointer-events:auto;display:none;text-align:center}
-#rewardWrap.on{display:block}
-#rewardBtn{padding:10px 16px 10px 10px;border-radius:999px;display:flex;align-items:center;gap:8px}
-#rewardBtn img{width:26px;height:26px;object-fit:contain}
-#rewardQuota{font-size:11px;color:#ffd77a;margin-top:4px}
-#joy{position:absolute;left:16px;bottom:16px;width:clamp(120px,30vw,190px);height:clamp(120px,30vw,190px);
-  border-radius:50%;background:#ffffff12;border:1px solid #ffffff26;pointer-events:auto;display:none}
-#joy.on{display:block}
-#joyKnob{position:absolute;left:50%;top:50%;width:42%;height:42%;transform:translate(-50%,-50%);border-radius:50%;
-  background:#ffffff5e}
-#count{position:absolute;inset:0;display:none;align-items:center;justify-content:center;pointer-events:none}
-#count.on{display:flex}
-#count span{font-size:clamp(70px,22vw,190px);font-weight:900;text-shadow:0 8px 0 #0007}
-#adOverlay{position:fixed;inset:0;background:#000;display:none;align-items:center;justify-content:center;flex-direction:column;gap:12px;z-index:40}
-#adOverlay.on{display:flex}
-#adOverlay .bar{width:min(420px,80vw);height:8px;background:#ffffff2a;border-radius:8px;overflow:hidden}
-#adOverlay .bar i{display:block;height:100%;width:0;background:#d98d16}
-#metaBar{position:absolute;left:12px;top:84px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;pointer-events:auto;max-width:74vw}
-.pill{background:#04100ccc;border:1px solid #ffffff22;border-radius:999px;padding:5px 10px;font-size:12px;font-weight:700;white-space:nowrap}
-.pill.dim{color:#9fb3a6;font-weight:600}
-.pillBtn{font:inherit;font-size:12px;font-weight:800;border:1px solid #ffffff26;border-radius:999px;padding:6px 11px;
-  background:#d98d16;color:#fff;cursor:pointer;box-shadow:0 3px 0 #9a6207}
-.pillBtn.alt{background:#2b6ba8;box-shadow:0 3px 0 #1b4a75}
-.pillBtn:active{transform:translateY(2px);box-shadow:none}
-.pillBtn:disabled,.gold:disabled,.ghostbtn:disabled{opacity:.45;box-shadow:none;cursor:default}
-#pauseTag{position:absolute;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;gap:6px;
-  background:#000a;letter-spacing:3px;font-weight:900;font-size:26px}
-#pauseTag.on{display:flex}
-#pauseTag small{font-size:12px;letter-spacing:1px;color:#9fb3a6;font-weight:600}
-#shopRow{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;align-items:center;font-size:13px}
-#netBadge{position:absolute;left:14px;bottom:14px;font-size:11px;color:#9fb3a6;pointer-events:auto}
-#netBadge b{color:#eaf3ec}
-</style>
+<link rel="apple-touch-icon" href="assets/AppIcon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="ui.css">
 </head>
 <body>
 <div id="stage">
   <canvas id="game"></canvas>
+  <div id="vignette"></div>
 
-  <!-- ============ HUD ============ -->
+  <!-- ============================ HUD (in-game) ============================
+       Zoning sesuai blueprint: pojok = info persisten, tengah = info sesaat. -->
   <div id="hud">
-    <div class="hudTop">
+    <!-- TOP-LEFT: back + identitas -->
+    <div class="zone tl">
+      <button class="iconbtn" id="backBtn" title="Kembali (Esc)" aria-label="Kembali">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+      </button>
+      <span class="pill dim" id="playerTag">—</span>
+    </div>
+
+    <!-- TOP-CENTER: fase + timer + hint + hitung mundur -->
+    <div class="zone tc">
       <div id="phase">LOBBY</div>
       <div id="timer">0:00</div>
       <div id="role">menunggu role…</div>
       <div id="hint"></div>
+      <div id="count"><span id="countNum">5</span></div>
     </div>
-    <div id="hpWrap"><div id="hearts"></div><div id="hpBar"><div id="hpFill"></div></div></div>
-    <div id="metaBar">
-      <span class="pill" id="coins">🪙 0</span>
-      <span class="pill" id="lives">💚 ×0</span>
-      <span class="pill dim" id="maxhpTag">MAX HP 3</span>
-      <button class="pillBtn" id="adLifeBtn">📺 Tonton Iklan +1 Nyawa</button>
-      <button class="pillBtn" id="adCoinsBtn">📺 Dapatkan Koin</button>
-      <button class="pillBtn alt" id="inviteBtn">🎁 Undang Teman</button>
+
+    <!-- TOP-RIGHT: suara, leaderboard, minimap -->
+    <div class="zone tr">
+      <button class="iconbtn" id="soundBtn" title="Suara on/off" aria-label="Suara" aria-pressed="true">
+        <svg viewBox="0 0 24 24" aria-hidden="true" id="soundIcon"><path d="M4 9v6h3l5 4V5L7 9H4z"/><path d="M16.5 8.5a5 5 0 010 7"/><path d="M19 6a8.5 8.5 0 010 12"/></svg>
+      </button>
+      <button class="iconbtn" id="lbBtn" title="Papan skor" aria-label="Papan skor">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19h14M7 19v-6M12 19V7M17 19v-9"/></svg>
+      </button>
     </div>
     <div id="minimapWrap"><canvas id="minimap"></canvas></div>
-    <div id="skills"></div>
-    <div id="toasts"></div>
-    <div id="rewardWrap">
-      <button id="rewardBtn" class="gold"><img id="rewardIcon" alt=""> <span id="rewardLabel">IKLAN</span></button>
-      <div id="rewardQuota"></div>
+    <div id="lbOverlay" class="glass">
+        <h3>Papan skor <button class="iconbtn" id="lbClose" aria-label="Tutup papan skor" style="width:28px;height:28px;min-width:28px;float:right"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></h3>
+        <table><tbody id="lbMini"></tbody></table></div>
+
+    <!-- META: ekonomi + iklan + undang (di bawah timer, kiri) -->
+    <div id="metaBar">
+      <span class="pill gold" id="coins">🪙 0</span>
+      <span class="pill" id="lives">💚 ×0</span>
+      <span class="pill dim" id="maxhpTag">MAX HP 3</span>
     </div>
-    <div id="joy"><div id="joyKnob"></div></div>
+
+    <!-- BOTTOM-LEFT: joystick -->
+    <div class="zone bl"><div id="joy"><div id="joyKnob"></div></div></div>
+
+    <!-- BOTTOM-CENTER: HP + reward iklan -->
+    <div class="zone bc">
+      <div id="hpWrap" class="glass"><div id="hearts"></div><div id="hpBar"><div id="hpFill"></div></div></div>
+      <div id="rewardWrap">
+        <button id="rewardBtn" class="btn gold"><img id="rewardIcon" alt=""> <span id="rewardLabel">IKLAN</span></button>
+        <div id="rewardQuota"></div>
+      </div>
+    </div>
+
+    <!-- BOTTOM-RIGHT: skill + dock iklan/referral (thumb-zone aksi) -->
+    <div class="zone br">
+      <div id="skills"></div>
+      <div id="adDock">
+        <button class="pillBtn" id="adLifeBtn">📺 +1 Nyawa</button>
+        <button class="pillBtn" id="adCoinsBtn">📺 Koin</button>
+        <button class="pillBtn alt" id="inviteBtn">🎁 Undang</button>
+      </div>
+    </div>
+
+    <div id="fx"></div>
     <div id="netBadge">mode: <b id="netMode">SOLO (bots)</b></div>
-    <div id="count"><span id="countNum">5</span></div>
     <div id="pauseTag"><span>IKLAN</span><small>permainan dijeda — jangan tutup tab</small></div>
   </div>
 
-  <!-- ============ LOBBY ============ -->
-  <div id="lobby" class="panel">
-    <img class="logo" id="logoImg" src="assets/Logo_HideSeek.png" alt="HideSeek"
-         onerror="this.style.display='none'">
-    <h1 id="titleFallback" style="display:none">HIDE·SEEK<small>SEMBUNYI JADI BARANG</small></h1>
+  <!-- toast global: di luar #hud supaya pesan lobby/room/net tetap terbaca -->
+  <div id="toasts" aria-live="polite"></div>
 
-    <div class="row">
-      <input id="nameInput" placeholder="nama kamu" maxlength="16" style="width:170px">
-      <select id="sizeSel"></select>
-    </div>
-    <div class="row">
-      <button id="soloBtn">MAIN SENDIRI (bots)</button>
-      <button id="hostBtn" class="alt">BUAT ROOM</button>
-      <input id="codeInput" placeholder="kode room" style="width:130px">
-      <button id="joinBtn" class="alt">GABUNG</button>
-    </div>
-    <div id="shopRow">
-      <span class="note">Koin: <b id="coinsLobby">0</b> · Nyawa cadangan: <b id="livesLobby">0</b></span>
-      <button id="buyHpBtn" class="ghostbtn">+1 Max HP — 50 🪙</button>
-      <button id="buyLifeBtn" class="ghostbtn">+1 Nyawa — 25 🪙</button>
-      <button id="inviteLobbyBtn" class="gold">🎁 Undang Teman</button>
-    </div>
-    <div class="row" id="roomRow" style="display:none">
-      <span class="note">Room code: <b id="roomCode">—</b> · kirim kode ini ke teman.
-        Host yang memulai ronde (Authority, sama seperti Unity build).</span>
-      <button id="startBtn" class="gold">MULAI RONDE</button>
-      <button id="leaveBtn" class="ghostbtn">KELUAR</button>
-    </div>
-    <p class="note">
-      Aturan sama dengan versi Unity: <b>5s hitung mundur → 30s bersembunyi → 60s dikejar → 10s hasil</b>.
-      Hider punya 3 HP, 2 skill (Kamuflase + Prop Swap) cooldown 10s. Seeker +15% kecepatan,
-      skill Radar &amp; Sonic Blast cooldown 8s. Hider terakhir yang hidup = menang.<br>
-      <span class="kbd">A/D/W/S</span> atau <span class="kbd">←↑↓→</span> gerak ·
-      <span class="kbd">1</span>/<span class="kbd">2</span> skill · <span class="kbd">klik</span>/<span class="kbd">tap</span> = tangkap (Seeker) ·
-      <span class="kbd">Space</span> mulai ronde
-    </p>
+  <!-- ============================ SPLASH ============================ -->
+  <div id="splash" class="screen on">
+    <img class="lizard" src="assets/Chameleon_Hider.png" alt="" onerror="this.style.display='none'">
+    <h1 class="logo">BUNGLON!<small>sembunyi jadi barang</small></h1>
+    <div id="splashBarWrap"><div id="splashBar"></div></div>
+    <div id="splashPct">MEMUAT 0%</div>
+    <div class="spinner" id="splashSpinner"></div>
+    <p class="note" id="splashTip">Tips: tekan <span class="kbd">1</span> untuk menyatu dengan lantai.</p>
   </div>
 
-  <!-- ============ RESULT ============ -->
+  <!-- ============================ MAIN MENU ============================ -->
+  <div id="menu" class="screen">
+    <div class="card">
+      <img class="logo" id="logoImg" src="assets/Logo_HideSeek.png" alt="BUNGLON"
+           style="max-width:min(360px,80vw);width:100%;border-radius:18px" onerror="this.style.display='none'">
+      <h1 class="logo" id="titleFallback" style="display:none">BUNGLON!<small>sembunyi jadi barang</small></h1>
+      <div class="row" style="flex-direction:column;align-items:stretch;width:100%">
+        <button class="btn big" id="playBtn">▶ MAIN (bots)</button>
+        <button class="btn alt" id="multiBtn">🌐 MULTIPLAYER / ROOM</button>
+        <button class="btn purple" id="howtoBtn">📖 CARA MAIN</button>
+        <button class="btn ghost" id="settingsBtn">⚙️ SETELAN</button>
+      </div>
+      <div class="row">
+        <span class="pill dim" id="bestTag">rekor: 0</span>
+        <span class="pill gold" id="coinsMenu">🪙 0</span>
+        <span class="pill dim" id="verTag">v2 UI · web demo</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================ LOBBY ============================ -->
+  <div id="lobby" class="panel hidden">
+    <div class="card">
+      <h1 class="logo" style="font-size:clamp(20px,5vw,34px)">LOBBY<small>pilih nama &amp; room</small></h1>
+      <div class="row">
+        <input id="nameInput" placeholder="nama kamu" maxlength="16" style="width:min(180px,44vw)" autocomplete="off">
+        <select id="sizeSel" title="ukuran room"></select>
+      </div>
+      <div class="row">
+        <button class="btn" id="soloBtn">MAIN SENDIRI (bots)</button>
+        <button class="btn alt" id="hostBtn">BUAT ROOM</button>
+        <input id="codeInput" placeholder="kode room" style="width:120px;text-transform:uppercase" maxlength="6" autocomplete="off">
+        <button class="btn alt" id="joinBtn">GABUNG</button>
+      </div>
+      <div id="shopRow" class="row">
+        <span class="note">Koin: <b id="coinsLobby">0</b> · Nyawa cadangan: <b id="livesLobby">0</b></span>
+        <button class="btn ghost" id="buyHpBtn">+1 Max HP — 50 🪙</button>
+        <button class="btn ghost" id="buyLifeBtn">+1 Nyawa — 25 🪙</button>
+        <button class="btn gold" id="inviteLobbyBtn">🎁 Undang Teman</button>
+      </div>
+      <div class="row" id="roomRow" style="display:none">
+        <span class="note">Room code: <b id="roomCode">—</b> · kirim kode ini ke teman.
+          Host yang memulai ronde (Authority, sama seperti Unity build).</span>
+        <button class="btn gold" id="startBtn">MULAI RONDE</button>
+        <button class="btn ghost" id="leaveBtn">KELUAR</button>
+      </div>
+      <p class="note">
+        Aturan sama dengan versi Unity: <b>5s hitung mundur → 30s bersembunyi → 60s dikejar → 10s hasil</b>.
+        Hider punya 3 HP, 2 skill (Kamuflase + Prop Swap) cooldown 10s. Seeker +15% kecepatan,
+        skill Radar &amp; Sonic Blast cooldown 8s. Hider terakhir yang hidup = menang.<br>
+        <span class="kbd">A/D/W/S</span> gerak · <span class="kbd">1</span>/<span class="kbd">2</span> skill hider ·
+        <span class="kbd">Q</span>/<span class="kbd">E</span> skill seeker · <span class="kbd">Space</span> mulai ·
+        <span class="kbd">M</span> suara · <span class="kbd">Esc</span> pause
+      </p>
+      <div class="row"><button class="btn ghost" id="lobbyBackBtn">← MENU</button></div>
+    </div>
+  </div>
+
+  <!-- ============================ HASIL / GAME OVER ============================ -->
   <div id="result" class="panel hidden">
-    <h1 id="resultTitle">HIDERS MENANG</h1>
-    <div id="resultDetail" class="note"></div>
-    <table><thead><tr><th>#</th><th>Pemain</th><th>Role</th><th>Detail</th><th>Poin</th></tr></thead>
-      <tbody id="lbBody"></tbody></table>
-    <div class="row">
-      <button id="againBtn" class="gold">RONDE BERIKUTNYA</button>
-      <button id="lobbyBtn" class="ghostbtn">KE LOBBY</button>
+    <div class="card">
+      <h1 id="resultTitle">HIDERS MENANG</h1>
+      <div class="mvp" id="mvpTag"><span class="crown">👑</span><span id="mvpName">—</span></div>
+      <div id="resultDetail" class="note"></div>
+      <table><thead><tr><th>#</th><th>Pemain</th><th>Role</th><th>Detail</th><th>Poin</th></tr></thead>
+        <tbody id="lbBody"></tbody></table>
+      <div class="row">
+        <button class="btn gold" id="againBtn">RONDE BERIKUTNYA</button>
+        <button class="btn ghost" id="lobbyBtn">KE LOBBY</button>
+        <button class="btn ghost" id="resultMenuBtn">MENU</button>
+      </div>
+      <div class="note" id="nextRoundIn"></div>
     </div>
-    <div class="note" id="nextRoundIn"></div>
   </div>
 
-  <!-- ============ "iklan" (mirror AdsManager.simulateAds) ============ -->
+  <!-- ============================ PAUSE ============================ -->
+  <div id="pausePanel" class="screen">
+    <div class="sheet">
+      <h1 class="logo" style="font-size:clamp(18px,5vw,30px)">JEDA<small>ronde menunggu kamu</small></h1>
+      <div class="row" style="flex-direction:column;align-items:stretch">
+        <button class="btn big" id="resumeBtn">▶ LANJUT</button>
+        <button class="btn ghost" id="pauseSettingsBtn">⚙️ Setelan</button>
+        <button class="btn ghost" id="restartBtn">↻ Ulang ronde</button>
+        <button class="btn danger" id="quitBtn">✕ Keluar ke menu</button>
+      </div>
+      <p class="note" id="pauseHint">tekan <span class="kbd">Esc</span> untuk lanjut</p>
+    </div>
+  </div>
+
+  <!-- ============================ SETTINGS ============================ -->
+  <div id="settingsPanel" class="screen">
+    <div class="sheet">
+      <h1 class="logo" style="font-size:clamp(18px,5vw,28px)">SETELAN</h1>
+      <div class="switch" id="sfxSwitch" role="switch" tabindex="0" aria-checked="true"><b>🔔 Efek suara</b><i></i></div>
+      <div class="switch" id="musicSwitch" role="switch" tabindex="0" aria-checked="true"><b>🎵 Musik</b><i></i></div>
+      <div class="switch" id="hapticSwitch" role="switch" tabindex="0" aria-checked="true"><b>📳 Getar (haptic)</b><i></i></div>
+      <div class="switch" id="vibrateInfo" style="cursor:default"><span>Volume</span>
+        <input type="range" id="volumeRange" min="0" max="100" step="5" value="80" style="width:120px;padding:0">
+      </div>
+      <div class="switch" style="cursor:default"><span>Orientasi</span>
+        <select id="orientSel" style="min-height:36px;padding:6px 8px">
+          <option value="any">otomatis</option><option value="portrait">portrait</option><option value="landscape">landscape</option>
+        </select>
+      </div>
+      <div class="switch" style="cursor:default"><span>Bahasa</span>
+        <select id="langSel" style="min-height:36px;padding:6px 8px"><option value="id">Indonesia</option><option value="en">English</option></select>
+      </div>
+      <p class="note" id="deviceInfo">—</p>
+      <div class="row"><button class="btn" id="closeSettingsBtn">SELESAI</button></div>
+    </div>
+  </div>
+
+  <!-- ============================ CARA MAIN ============================ -->
+  <div id="howtoPanel" class="screen">
+    <div class="sheet" style="width:min(520px,94vw)">
+      <h1 class="logo" style="font-size:clamp(18px,5vw,28px)">CARA MAIN</h1>
+      <div class="step"><span class="n">1</span><p><b>LOBBY (30s)</b> — masuk room, role dirotasi otomatis tiap ronde.</p></div>
+      <div class="step"><span class="n">2</span><p><b>HITUNG MUNDUR (5s)</b> — hafalkan letak prop &amp; tile.</p></div>
+      <div class="step"><span class="n">3</span><p><b>BERSEMBUNYI (30s)</b> — <span class="kbd">1</span> Kamuflase: warna tubuh = rata-rata lantai di bawahmu. <span class="kbd">2</span> Prop Swap: diam di dekat meja/kursi/pot lalu menyamar jadi prop (gerak = membatalkan).</p></div>
+      <div class="step"><span class="n">4</span><p><b>DIKEJAR (60s)</b> — seeker 15% lebih cepat + <span class="kbd">Q</span> Radar (mencium posisi 1s) &amp; <span class="kbd">E</span> Sonic Blast (memperlambat + mendorong). Klik/tap dekat hider = menangkap.</p></div>
+      <div class="step"><span class="n">5</span><p><b>HASIL (10s)</b> — skor: seeker = 30/tangkapan, hider = detik hidup + 10/HP. Hider terakhir yang hidup = MVP.</p></div>
+      <p class="note">Tertangkap 3× = jadi hantu. Bisa hidup lagi lewat <b>📺 +1 Nyawa</b> (iklan) atau nyawa cadangan 💚 yang terpakai otomatis.</p>
+      <div class="row"><button class="btn" id="closeHowtoBtn">MENGERTI</button></div>
+    </div>
+  </div>
+
+  <!-- ==================== "iklan" (mirror AdsManager.simulateAds) ==================== -->
   <div id="adOverlay">
-    <div style="letter-spacing:3px;color:#9fb3a6;font-size:12px">IKLAN (SIMULASI — sama seperti AdsManager tanpa SDK)</div>
-    <div style="font-size:26px;font-weight:900" id="adText">Menyiapkan hadiah…</div>
+    <div id="adKicker">iklan (simulasi — sama seperti AdsManager tanpa SDK)</div>
+    <div id="adText">Menyiapkan hadiah…</div>
     <div class="bar"><i id="adBar"></i></div>
-    <button class="ghostbtn" id="adSkipBtn">batalkan (tidak ada reward)</button>
+    <button class="btn ghost" id="adSkipBtn">batalkan (tidak ada reward)</button>
   </div>
 </div>
 
 <!-- konfigurasi (ID iklan TIDAK di repo: web/config.js dihasilkan dari .env) -->
 <script src="config.example.js"></script>
 <script src="config.js" onerror="/* opsional: node tools/gen_web_config.js */"></script>
-<!-- sistem ads + referral (vanilla, dimuat sebelum game.js) -->
+<!-- UI kit + audio (vanilla, tanpa dependency) -->
+<script src="uiKit.js"></script>
+<script src="audioKit.js"></script>
+<!-- sistem iklan + referral -->
 <script src="adsManager.js"></script>
 <script src="referralSystem.js"></script>
 <script src="game.js"></script>
+<script>
+/* PWA: service worker (offline + Add to Home Screen). Bisa dimatikan: ?nosw=1 */
+if ('serviceWorker' in navigator && !/nosw=1/.test(location.search) && location.protocol.indexOf('http') === 0) {
+  addEventListener('load', function () {
+    navigator.serviceWorker.register('sw.js').catch(function () { /* offline mode saja */ });
+  });
+}
+</script>
 </body>
 </html>
