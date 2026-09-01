@@ -96,6 +96,11 @@ function main() {
       codeLength: num(env.REFERRAL_CODE_LENGTH, 7),
       welcomeSeconds: num(env.REFERRAL_WELCOME_SECONDS, 6),
     },
+    api: {
+      baseUrl: env.API_BASE_URL || '',
+      timeoutMs: num(env.API_TIMEOUT_MS, 6000),
+      autoSync: bool(env.API_AUTO_SYNC, true),
+    },
     economy: {
       startCoins: num(env.ECONOMY_START_COINS, 0),
       coinsPerScore: num(env.ECONOMY_COINS_PER_SCORE, 0.5),

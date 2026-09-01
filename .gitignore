@@ -42,3 +42,7 @@ web/config.js
 *.local
 # artefak test/pratinjau yang besar
 ArtRaw/preview_*
+# akun JSON store server (uid/login/coin/playerdata) - dibuat otomatis saat server jalan
+server/data/
+# skrip penambal sekali-pakai yang dipakai agent saat develop
+tools/_*.py

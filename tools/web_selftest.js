@@ -629,6 +629,79 @@ const until = (r, pred, dt = 1 / 60, maxSec = 200) => {
       && /Icon_Freeze\s+112x112/.test(rd2('Assets/Art/HideSeek/manifest.txt')), '');
   }
 
+  console.log('\n[17] App ID Photon + backend akun: satu sumber utk Unity, web, dan dokumen');
+  {
+    const before = fail;
+    const APPID = '644b49fc-42a6-4a58-a247-163ae36caa12';
+    const cs = rd('Assets/Scripts/Core/HideSeekConstants.cs');
+    const net = rd('Assets/Scripts/Network/NetworkManager.cs');
+    const tool = rd('Assets/Scripts/Editor/HideSeekSetupTool.cs');
+    const env = rd('.env.example');
+    const readme = rd('README.md');
+    const guide = rd('integration-guide.md');
+    const game = rd('web/game.js');
+    const html = rd('web/index.html');
+
+    ok('Unity: HideSeekConstants.PhotonAppId = App ID yang diberikan user',
+      new RegExp('PhotonAppId\\s*=\\s*"' + APPID + '"').test(cs), '');
+    ok('Unity: HideSeekConstants.PhotonRegion = asia', /PhotonRegion\s*=\s*"asia"/.test(cs), '');
+    ok('Unity: Awake memakai ApplyCodeConfig (bukan cuma log), dan method-nya ada',
+      /ApplyCodeConfig\(\);/.test(net) && /private void ApplyCodeConfig\(\)/.test(net), '');
+    ok('Unity: nilai manual di Inspector tidak ditimpa (hanya mengisi yang kosong)',
+      /string\.IsNullOrEmpty\(s\.AppSettings\.AppIdRealtime\)/.test(net), '');
+    ok('Unity: App Version + Fixed Region juga diterapkan dari kode',
+      /AppVersion\s*=\s*HideSeekConstants\.GameVersion/.test(net)
+      && /FixedRegion\s*=\s*HideSeekConstants\.PhotonRegion/.test(net), '');
+    ok('Unity: ApplyCodeConfig dibungkus try/catch (perbedaan versi PUN2 tidak fatal)',
+      /catch \(System\.Exception e\)[\s\S]{0,200}?ApplyCodeConfig/.test(net.split('private void ApplyCodeConfig')[1] || '')
+      || /ApplyCodeConfig dilewati/.test(net), '');
+    ok('Editor: menu Setup/7 ada + reset best-region dipanggil lewat refleksi (aman antar versi)',
+      /MenuItem\("HideSeek\/Setup\/7\.[^"]*"\)/.test(tool) && /ResetBestRegionCodeInPreferences/.test(tool), '');
+    ok('Editor: Setup/7 memakai SerializedObject (menulis aset) + tidak menyebut TMP',
+      /new SerializedObject\(settings\)/.test(tool) && !/TextMeshPro/.test(tool.slice(tool.indexOf('ApplyPhotonSettings'), tool.indexOf('ApplyPhotonSettings') + 3000)), '');
+
+    ok('.env: PHOTON_APP_ID sama dengan Unity Constants', new RegExp('PHOTON_APP_ID=' + APPID).test(env), '');
+    ok('.env: PHOTON_REGION = asia', /PHOTON_REGION=asia/.test(env), '');
+    const envKeys = Array.from(new Set((rd('server/api.js').match(/env\.[A-Z0-9_]{3,}/g) || []).map(x => x.slice(4))));
+    ok('.env.example menyebut SEMUA env var yang dibaca server/api.js',
+      envKeys.every(k => new RegExp('^' + k + '=|' + k + '=').test(env)), envKeys.filter(k => !env.includes(k)));
+    const API = require(path.join(ROOT, 'server/api.js'));
+    const D = API.DEFAULTS;
+    const envNum = k => { const m = env.match(new RegExp('^' + k + '=(\\d+)', 'm')); return m ? +m[1] : null; };
+    ok('DEFAULTS server == angka yang didokumentasikan .env (referral/ads/kode)',
+      D.refCoinsInviter === envNum('REF_COINS_INVITER') && D.refCoinsInvitee === envNum('REF_COINS_INVITEE')
+      && D.refHpInvitee === envNum('REF_HP_INVITEE') && D.refCodeLength === envNum('REF_CODE_LENGTH')
+      && D.adDailyCap === envNum('ADS_DAILY_CAP') && D.minPass === envNum('PASS_MIN'),
+      [D.refCoinsInviter, envNum('REF_COINS_INVITER'), D.minPass, envNum('PASS_MIN')]);
+    ok('server: cooldown iklan default == adsManager.js (30 dtk)',
+      D.adCooldownSeconds === require(path.join(ROOT, 'web/adsManager.js')).DEFAULT_COOLDOWN || D.adCooldownSeconds === 30, D.adCooldownSeconds);
+
+    ok('README: ada bagian backend akun (§0.1) yang menyebut server/api.js + net-server',
+      /## 0\.1\)/.test(readme) && /server\/api\.js/.test(readme) && /net-server/.test(readme), '');
+    ok('README: App ID user ditulis + cara Setup 7 + Fixed Region asia',
+      readme.includes(APPID) && /Setup → 7\./.test(readme) && /Fixed Region/.test(readme), '');
+    ok('README: dokumentasi menyebut apiKit.js dan "tidak pernah melempar"',
+      /apiKit\.js/.test(readme) && /tidak pernah melempar/.test(readme), '');
+    ok('integration-guide: ada §9 backend + baris apiKit.js/server di tabel + script tag apiKit',
+      /^## 9\. Backend akun/m.test(guide) && /web\/apiKit\.js/.test(guide)
+      && /server\/api\.js/.test(guide) && /<script src="apiKit\.js"><\/script>/.test(guide), '');
+    ok('integration-guide: §9 memuat tabel endpoint yang benar (8 rute inti)',
+      ['POST /api/signup', 'POST /api/login', 'GET  /api/me', 'POST /api/sync', 'POST /api/referral/claim',
+       'POST /api/friends/find', 'POST /api/ads/reward', 'GET  /api/leaderboard'].every(k => guide.includes(k)), '');
+
+    ok('game.js: memakai klien apiKit (createApiClient) — bukan fetch liar',
+      /window\.createApiClient|BungAPI\.ApiClient/.test(game), '');
+    ok('game.js: saldo SERVER diadopsi (coins/lives) + kode referral server dipakai modal',
+      /profile\.coins = Math\.max\(0, u\.coins \| 0\)/.test(game)
+      && /profile\.lives = clamp\(u\.lives \| 0, 0, 9\)/.test(game)
+      && /referral\.setServerCode\(u\.refCode\)/.test(game), '');
+    ok('index.html: panel AKUN + kolom kode referral + tombol friend ada',
+      /id="accountPanel"/.test(html) && /id="regRef"/.test(html) && /id="addFriendBtn"/.test(html), '');
+    ok('index.html memuat apiKit.js SEBELUM game.js',
+      html.indexOf('apiKit.js') > 0 && html.indexOf('apiKit.js') < html.lastIndexOf('game.js'), '');
+    ok('tidak ada kegagalan di blok [17]', fail === before, fail - before);
+  }
+
   console.log(`\n=== web_selftest: ${pass} PASS, ${fail} FAIL ===`);
   process.exitCode = fail ? 1 : 0;
   if (!fail) console.log('Rules engine web selaras dengan C#: HideSeekConstants, GameManager, PlayerController/Combat, Hider/SeekerSkill, CamouflageHelper, RewardOffers/AdsManager, SetupTool map.');

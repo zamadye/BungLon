@@ -127,10 +127,10 @@ namespace HideSeek.Network
             // Konfigurasi global PUN2
             PhotonNetwork.AppVersion = HideSeekConstants.GameVersion;
             PhotonNetwork.AutomaticallySyncScene = true;         // host load scene -> klien ikut
-            // NOTE: App ID PUN2 dibaca dari Assets/Photon/PhotonUnityNetworking/Resources/PhotonServerSettings.asset
-            //       (field "App ID Realtime"). HideSeekConstants.PhotonAppId hanya dokumentasi/build script.
-            if (!string.IsNullOrEmpty(HideSeekConstants.PhotonAppId))
-                Log("PhotonAppId di kode = " + HideSeekConstants.PhotonAppId + " (set juga di PhotonServerSettings).");
+            // App ID PUN2 dibaca dari Assets/Photon/PhotonUnityNetworking/Resources/PhotonServerSettings.asset.
+            // Bila aset itu masih kosong (project baru / Photon baru diimport), nilai dari
+            // HideSeekConstants yang dipakai supaya Connect() tidak gagal diam-diam.
+            ApplyCodeConfig();
             // Nick: pakai nama tersimpan (dari InputField di lobby) bila ada.
             string saved = PlayerPrefs.GetString(NickPrefKey, "");
             if (!string.IsNullOrEmpty(saved)) PhotonNetwork.NickName = saved;
@@ -150,6 +150,48 @@ namespace HideSeek.Network
             if (Input.GetKeyDown(KeyCode.N)) CreateRoom(null, false);
             else if (Input.GetKeyDown(KeyCode.J)) JoinQuickPlay();
             else if (Input.GetKeyDown(KeyCode.L)) LeaveRoom(false);
+        }
+
+        /// <summary>
+        /// Menyalin konfigurasi dari kode ke PhotonServerSettings SEBELUM connect:
+        /// App ID Realtime, App Version dan Fixed Region. Tidak menimpa nilai yang sudah
+        /// diisi manual di Inspector (perilaku "yang ada dipakai, yang kosong diisi").
+        /// Dibungkus try/catch karena nama field AppSettings berbeda tipis antar versi PUN2.
+        /// </summary>
+        private void ApplyCodeConfig()
+        {
+            if (string.IsNullOrEmpty(HideSeekConstants.PhotonAppId)) return;
+            try
+            {
+                ServerSettings s = PhotonNetwork.PhotonServerSettings;
+                if (s == null || s.AppSettings == null)
+                {
+                    Log("PhotonServerSettings belum ada (Photon belum diimport?) - App ID dari kode dilewati.");
+                    return;
+                }
+                if (string.IsNullOrEmpty(s.AppSettings.AppIdRealtime))
+                {
+                    s.AppSettings.AppIdRealtime = HideSeekConstants.PhotonAppId;
+                    Log("App ID Realtime diisi dari HideSeekConstants: " + HideSeekConstants.PhotonAppId);
+                }
+                else if (s.AppSettings.AppIdRealtime != HideSeekConstants.PhotonAppId)
+                {
+                    Log("App ID di PhotonServerSettings yang dipakai (" + s.AppSettings.AppIdRealtime +
+                        "). Ubah lewat menu HideSeek > Setup > 7 bila ingin disamakan.");
+                }
+                if (string.IsNullOrEmpty(s.AppSettings.AppVersion))
+                    s.AppSettings.AppVersion = HideSeekConstants.GameVersion;
+                if (!string.IsNullOrEmpty(HideSeekConstants.PhotonRegion) && string.IsNullOrEmpty(s.AppSettings.FixedRegion))
+                {
+                    // FixedRegion diisi = Best Region otomatis MATI; semua klien harus pakai region yang sama.
+                    s.AppSettings.FixedRegion = HideSeekConstants.PhotonRegion;
+                    Log("Fixed Region = " + HideSeekConstants.PhotonRegion + " (Best Region nonaktif).");
+                }
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogWarning("[HideSeek/Net] ApplyCodeConfig dilewati: " + e.Message);
+            }
         }
 
         /// <summary>Key PlayerPrefs untuk nama pemain (dipakai juga oleh RoomListUI).</summary>

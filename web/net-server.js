@@ -1,11 +1,14 @@
 /* =============================================================================
  * HideSeek Online — dev server untuk web demo (TANPA dependency npm)
  * -----------------------------------------------------------------------------
- * Dua fungsi dalam satu port:
+ * Tiga fungsi dalam satu port:
  *   1) static file server untuk web/  →  buka http://localhost:8790/
  *   2) room relay "mirip PUN" (HTTP long-poll) supaya 2 tab/browser bisa
  *      main bareng: host = Authority (phase timer + hit keputusan), klien
  *      cuma kirim input dan menerima snapshot.
+ *   3) /api/*  -> backend akun (server/api.js): signup/login JWT, referral
+ *      yang benar-benar membayar +100 koin ke pengundang, ID game + teman.
+ *      Bila folder server/ dihapus, server ini tetap jalan penuh (mode lokal).
  * Ini bukan pengganti Photon — di Unity, room/relay ditangani Photon Cloud
  * (RoomOptions + [PunRPC] + RaiseEventOptions). Server ini hanya supaya build
  * web bisa diuji multiplayer tanpa engine.
@@ -16,6 +19,15 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+
+/* ---------- backend akun (opsional: folder server/ boleh tidak ikut deploy) --- */
+let api = null;
+try {
+  api = require('../server/api.js').createApi({});
+} catch (e) {
+  api = null;
+  console.log('ℹ akun/referral server: tidak aktif (' + (e && e.code === 'MODULE_NOT_FOUND' ? 'folder server/ tidak ada — mode lokal saja' : e.message) + ')');
+}
 
 const PORT = parseInt(process.argv[2] || process.env.PORT || '8790', 10);
 const ROOT = __dirname;                       // web/
@@ -90,7 +102,10 @@ const server = http.createServer(async (req, res) => {
   const u = new URL(req.url, 'http://x');
   const p = u.pathname;
 
-  if (req.method === 'OPTIONS') { res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type', 'access-control-allow-methods': 'GET,POST,OPTIONS' }); return res.end(); }
+  if (req.method === 'OPTIONS') { res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type,authorization', 'access-control-allow-methods': 'GET,POST,OPTIONS' }); return res.end(); }
+
+  /* ---------- API akun: signup/login JWT, referral, teman, reward iklan ---------- */
+  if (api && (p === '/api' || p.indexOf('/api/') === 0)) { await api.handle(req, res, u); return; }
 
   /* ---------- API room ---------- */
   if (p === '/room/create' && req.method === 'POST') {
@@ -150,21 +165,33 @@ const server = http.createServer(async (req, res) => {
   if (!abs.startsWith(ROOT)) { res.writeHead(403); return res.end('no'); }
   fs.readFile(abs, (err, buf) => {
     if (err) {
-      // SPA fallback: file hilang → index.html, tapi beri hint jelas utk asset
-      if (/\.(png|jpg|jpeg|svg|gif|webp|css|js|json|webmanifest|ico|mp3|ogg|woff2)$/.test(abs)) {
-        res.writeHead(404, { 'content-type': 'text/plain' }); return res.end('404 ' + file);
-      }
-      buf = fs.readFileSync(path.join(ROOT, 'index.html'));
-      res.writeHead(200, { 'content-type': MIME['.html'] }); return res.end(buf);
+      // 404 sungguhan utk file yang hilang. Penting: kalau asset dijawab 200 + HTML,
+      // loader sprite bisa menggantung (onload/onerror tidak pernah fired) -> splash macet.
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+      return res.end('404 ' + file);
     }
-    res.writeHead(200, { 'content-type': MIME[path.extname(abs)] || 'application/octet-stream', 'cache-control': 'no-cache' });
+    res.writeHead(200, {
+      'content-type': MIME[path.extname(abs)] || 'application/octet-stream',
+      'content-length': buf.length,
+      'cache-control': 'no-cache',
+    });
     res.end(buf);
   });
 });
 
+/** Matikan rapi: simpan db akun dulu supaya grant koin/referral tidak hilang. */
+function shutdown() {
+  try { if (api && api.flush) api.flush(); } catch (e) { }
+  process.exit(0);
+}
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
+
+
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`\n  HideSeek web demo  →  http://localhost:${PORT}/
   multiplayer relay  →  /room/create · /room/join · /room/poll   (tanpa dependency)
+  ${api ? 'akun + referral    →  /api/health · signup/login JWT, ID game, daftar teman' : 'akun + referral    →  TIDAK aktif (folder server/ tidak ditemukan)'}
   (untuk main sendiri: buka lalu tekan "MAIN SENDIRI (bots)" — tidak perlu server ini)
 `);
 });

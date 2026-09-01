@@ -7,6 +7,7 @@
 //    HideSeek > Setup > 1. Generate Placeholder Assets
 //    HideSeek > Setup > 2. Set Layer 6 = Ground
 //    HideSeek > Setup > 3. Build Demo Scene (in current scene)
+//    HideSeek > Setup > 7. Terapkan App ID + Region Photon (menulis PhotonServerSettings)
 //  Semua langkah idempotent (aman dijalankan 2x). Aset ditulis ke
 //  Prefab PEMAIN disimpan di ROOT Assets/Resources/ (syarat PhotonNetwork.Instantiate),
 //  aset lain (sprite, ring, peta, prop, database) di Assets/Resources/HideSeek/
@@ -117,6 +118,82 @@ namespace HideSeek.EditorTools
             if (AssetDatabase.LoadAssetAtPath<Object>(toPath) != null) AssetDatabase.DeleteAsset(toPath);
             if (!AssetDatabase.CopyAsset(fromPath, toPath))
                 Debug.LogWarning("[HideSeek] Gagal menyalin prefab ke " + toPath + " (tidak fatal).");
+        }
+
+        // ============================ MENU 7 ===================================
+        /// <summary>
+        /// Menulis HideSeekConstants.PhotonAppId + GameVersion + PhotonRegion PERMANEN ke
+        /// aset PhotonServerSettings, lalu membuang "best region" yang ter-cache di PlayerPrefs.
+        /// Idempotent: nilai yang sudah sama tidak ditulis ulang. Bila Photon belum diimport,
+        /// menu ini hanya memberi info (tidak error).
+        /// </summary>
+        [MenuItem("HideSeek/Setup/7. Terapkan App ID + Region Photon")]
+        public static void ApplyPhotonSettings()
+        {
+            var settings = PhotonNetwork.PhotonServerSettings;
+            if (settings == null)
+            {
+                Debug.LogWarning("[HideSeek] PhotonServerSettings tidak ditemukan - import PUN 2 dulu (Asset Store), lalu jalankan menu ini lagi.");
+                return;
+            }
+
+            int changed = 0;
+            var so = new SerializedObject(settings);
+
+            // PUN2 menyimpan AppSettings sebagai object/nested property; nama field sedikit
+            // berbeda antar versi, jadi setiap path dicoba satu per satu (yang tidak ada dilewati).
+            changed += SetStr(so, "AppIdRealtime", HideSeekConstants.PhotonAppId);
+            changed += SetStr(so, "AppSettings.AppIdRealtime", HideSeekConstants.PhotonAppId);
+            changed += SetStr(so, "AppVersion", HideSeekConstants.GameVersion);
+            changed += SetStr(so, "AppSettings.AppVersion", HideSeekConstants.GameVersion);
+            changed += SetStr(so, "FixedRegion", HideSeekConstants.PhotonRegion);
+            changed += SetStr(so, "AppSettings.FixedRegion", HideSeekConstants.PhotonRegion);
+
+            if (so.ApplyModifiedPropertiesWithoutUndo()) { /* nilai tertulis */ }
+            EditorUtility.SetDirty(settings);
+            AssetDatabase.SaveAssets();
+
+            // Nilai runtime (dipakai Connect() pada sesi ini) juga disamakan.
+            try
+            {
+                if (settings.AppSettings != null)
+                {
+                    settings.AppSettings.AppIdRealtime = HideSeekConstants.PhotonAppId;
+                    settings.AppSettings.AppVersion = HideSeekConstants.GameVersion;
+                    if (!string.IsNullOrEmpty(HideSeekConstants.PhotonRegion))
+                        settings.AppSettings.FixedRegion = HideSeekConstants.PhotonRegion;
+                }
+            }
+            catch (System.Exception e)
+            {
+                Debug.Log("[HideSeek] (info) AppSettings runtime dilewati: " + e.Message);
+            }
+
+            // Buang cache region terbaik supaya region baru benar-benar dipakai.
+            try
+            {
+                var m = settings.GetType().GetMethod("ResetBestRegionCodeInPreferences");
+                if (m != null) m.Invoke(settings, null);
+            }
+            catch (System.Exception e)
+            {
+                Debug.Log("[HideSeek] (info) reset best-region dilewati: " + e.Message);
+            }
+
+            Debug.Log("[HideSeek] PhotonServerSettings: App ID = " + HideSeekConstants.PhotonAppId +
+                      ", App Version = " + HideSeekConstants.GameVersion +
+                      ", Region = " + (string.IsNullOrEmpty(HideSeekConstants.PhotonRegion) ? "Best Region (otomatis)" : HideSeekConstants.PhotonRegion) +
+                      " (" + changed + " nilai baru ditulis).");
+        }
+
+        /// <summary>Set satu string property SerializedObject bila property-nya ada. Return 1 bila berubah.</summary>
+        private static int SetStr(SerializedObject so, string path, string value)
+        {
+            var prop = so.FindProperty(path);
+            if (prop == null || prop.propertyType != SerializedPropertyType.String) return 0;
+            if (prop.stringValue == value) return 0;
+            prop.stringValue = value;
+            return 1;
         }
 
         /// <summary>

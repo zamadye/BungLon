@@ -2,7 +2,7 @@
 
 Versi HTML5/JS **BUNGLON! / HideSeek Online** (`web/`). Vanilla JS, nol dependency,
 tanpa build step. Dua sistem di sini berdiri sendiri: boleh dipakai di project HTML5 lain
-(Cocos export, Phaser, canvas custom) cukup dengan menyalin 2 file + 4 baris init.
+(Cocos export, Phaser, canvas custom) cukup dengan menyalin 2 file + 4 baris init. Backend opsional (akun/JWT/referral/Game ID) juga nol dependency — lihat **§9**.
 
 | File | Isi |
 |---|---|
@@ -10,6 +10,8 @@ tanpa build step. Dua sistem di sini berdiri sendiri: boleh dipakai di project H
 | `web/referralSystem.js` | kelas `ReferralSystem` — kode unik, `?ref=`, popup selamat datang, modal undang, counter pengundang |
 | `web/config.example.js` | template konfigurasi (`window.HIDESEEK_CONFIG`). **ID iklan tidak pernah ditulis di kode** |
 | `tools/gen_web_config.js` | pembangkit `web/config.js` dari `.env` (di-gitignore) |
+| `web/apiKit.js` | kelas `ApiClient` (`window.BungAPI`) — klien REST backend akun: JWT, signup/login, sync, referral, Game ID + teman, reward ads, leaderboard |
+| `server/api.js` · `server/auth.js` · `server/store.js` | backend Node nol-dependency (di-mount `web/net-server.js` pada `/api/*`) — lihat **§9** |
 | `web/game.js` | contoh pemakaian nyata: tombol HUD, koin, +1 nyawa, jeda permainan |
 | `web/uiKit.js` | lapisan UI vanilla: `Joystick` (deadzone + sensitivitas), `SkillButton` (cincin cooldown), `Camera2D` (kamera follow+zoom, padanan `Utils/PlayerCamera.cs`), `Screens`, `Fx`, `Viewport`, `Haptics` — tidak dipakai `AdsManager`/`ReferralSystem`, jadi tidak wajib disalin |
 | `web/audioKit.js` | SFX + BGM sintesis Web Audio, `duck()` saat iklan (dipanggil game.js, opsional) |
@@ -31,6 +33,8 @@ tanpa build step. Dua sistem di sini berdiri sendiri: boleh dipakai di project H
 <!-- sistem iklan + referral -->
 <script src="adsManager.js"></script>
 <script src="referralSystem.js"></script>
+<!-- opsional: klien backend akun (§9); tanpa file ini game tetap jalan (mode lokal) -->
+<script src="apiKit.js"></script>
 <script src="game.js"></script>
 ```
 
@@ -248,3 +252,80 @@ Verifikasi cepat di browser: buka game → tekan `?solo=1` → klik **📺 Dapat
 1.5 dtk + HUD `50` di pill berikon koin; klik lagi → toast `Tunggu 30 detik lagi`; **🎁 Undang Teman** → kode + link;
 buka link itu di tab baru → popup “Selamat datang! … +50 Koin & +1 Nyawa!”. Konsol:
 `hideSeekGame.profile`, `hideSeekGame.ads.cfg`, `hideSeekReferral.getStats()`.
+
+
+---
+
+## 9. Backend akun: JWT, referral, Game ID, teman (`server/api.js` + `web/apiKit.js`)
+
+Dijalankan otomatis oleh `web/net-server.js` pada path `/api/*` (satu origin dengan game dan
+relay room → tidak perlu CORS untuk Service Worker). Bisa juga berdiri sendiri:
+`node server/api.js --port 3000` (atau `--data-dir <path>`). Backend ini **nol dependency**:
+hanya `http`, `crypto`, `fs` bawaan Node; penyimpanan berupa JSON file atomic di
+`server/data/` (di-gitignore) yang di-flush saat SIGINT/SIGTERM. **Kalau API mati, game tetap
+jalan penuh** — `net-server.js` membalas 404 JSON untuk `/api/*` dan `apiKit.js` mengubahnya
+menjadi `{ ok:false, offline:true }`.
+
+### 9.1 Endpoint
+
+| Method + path | Auth | Body / query | Balasan |
+|---------------|:----:|--------------|---------|
+| `GET  /api/health` | – | – | `{ ok, name, version, users }` |
+| `POST /api/signup` | – | `{ name, login, password, ref?, migrate? }` | `201 { token, user, referral }` |
+| `POST /api/login` | – | `{ login, password, migrate? }` | `{ token, user, referral }` |
+| `GET  /api/me` | Bearer | – | `{ user, referral? }` (memo bayarkan bonus referral tertunda) |
+| `POST /api/sync` | Bearer | `{ coins, xp, best, rounds, lives? }` | `{ user }` |
+| `GET  /api/referral` | Bearer | – | `{ code, link?, invited, coinsPerFriend }` |
+| `POST /api/referral/claim` | Bearer | `{ ref }` | `{ ok, paid, user, referral }` |
+| `POST /api/friends/find` | Bearer | `{ gameId }` (ID 7 digit **atau** nama) | `{ found, state, player, reqId? }` |
+| `GET  /api/friends` | Bearer | – | `{ friends, incoming, outgoing }` |
+| `POST /api/friends/request` · `/respond` · `/remove` | Bearer | `{ gameId }` · `{ reqId, accept }` · `{ uid }` | `{ ok, state, ... }` |
+| `POST /api/room` | Bearer | `{ room }` (kosong = keluar) | `{ ok, room }` |
+| `POST /api/ads/reward` | Bearer | `{ kind, nonce }` | `{ ok, granted, user, state }` |
+| `GET  /api/ads/state` | Bearer | – | `{ state, remaining, nextAt }` |
+| `GET  /api/leaderboard` | – | `?limit=15` | `{ rows: [{ rank, uid, name, gameId, level, best, rounds, xp }] }` |
+
+`user = { uid, name, login, gameId, refCode, coins, lives, bonusHp, xp, level, best, rounds,
+invited, friends, room, grantedCoins, grantedLives, createdAt, since }`. Rute tak dikenal →
+`404 { error, routes }`; semua error memakai format `{ error: "..." }` + status 4xx.
+
+### 9.2 Aturan yang wajib ditaati port lain (mis. Unity)
+
+1. **Token** = JWT HS256 (`JWT_SECRET`; TTL `JWT_TTL_DAYS` hari) dikirim sebagai
+   `Authorization: Bearer <token>`; `401` = kedaluwarsa/salah → klien wajib menghapus sesi.
+2. **Password** di-hash `scrypt(N=16384, r=8, p=1)` dengan salt per user dan dibandingkan
+   `timingSafeEqual`; login dibatasi 6×/menit/IP, signup 12×/menit/IP (`429`).
+3. **Server = sumber saldo.** `coins = earned + granted` (`earned` dari laporan main, `granted`
+   dari iklan/referral yang dibayar server). Nilai `migrate`/`sync` yang lebih rendah diabaikan
+   (monoton naik) sehingga ganti perangkat tidak menghapus progres.
+4. **Referral** dibayar hanya saat * kedua akun ada*: claim form (`/api/referral/claim`) atau
+   `migrate.ref` saat login → baris `{ from, to, coinsForInviter, coinsForInvitee, bonusHp }`
+   dengan `claimedAt` per pihak (anti bayar dua kali). `refClaimed: true` di `migrate` = akun
+   lokal sudah pernah menerima bonus manual → server tidak membayar ulang.
+5. **Game ID** 7 digit dibuat unik saat signup; `makeRefCode` memakai alfabet tanpa `I/O/0/1`
+   sehingga kode referral user selalu lolos `isValidCode()` di `referralSystem.js`.
+6. **Rate limit per menit:** find 30/uid, ads 12/uid (+ cooldown `ADS_COOLDOWN_SECONDS` dan
+   kuota harian `ADS_DAILY_CAP`).
+7. **Nonce iklan** sekali pakai per user (`adclaims.json`) — ganti dengan verifikasi
+   SSV/signature AdMob untuk produksi (§7).
+
+### 9.3 Klien
+
+`web/apiKit.js` → `window.BungAPI` / `window.createApiClient(extra)`; instance game ada di
+`window.hideSeekAccount`. Metode: `health signup login restore me sync referral claimReferral
+findPlayer addFriend friends acceptFriend removeFriend announceRoom adReward adState leaderboard`
++ helper statis `fmtGameId`, `digitsOnly`, `agoLabel`. **Kontrak: tidak ada metode yang melempar
+exception** — selalu `{ ok, ... }` (+ `offline: true` saat fetch gagal/timeout `API_TIMEOUT_MS`).
+Bila body balasan memuat `user`, klien otomatis `setSession` + memanggil `onChange` (game
+mengadopsi `coins/lives/xp/best/rounds` + kode referral server). Port Unity cukup memakai
+`UnityWebRequest` ke endpoint yang sama — tanpa SDK.
+
+```js
+const acct = window.createApiClient();                       // baseUrl dari HIDESEEK_CONFIG.api
+const r = await acct.signup({ name: 'Zam', login: 'zam', password: 'rahasia', ref: 'QQW7RTZ' });
+if (r.ok) await acct.sync({ coins: 640, xp: 1800, best: 900, rounds: 12 });
+```
+
+Uji regresi: `node tools/server_api_test.js` (menjalakan server betulan di port sementara,
+136 assertion termasuk JWT/claim/referral/ads/teman/leaderboard/rate-limit) dan
+`node tools/web_boot_test.js` (boot + Service Worker + mount `/api/*`).

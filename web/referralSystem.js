@@ -5,8 +5,9 @@
  *   • tiap pemain punya kode unik 7 karakter A–Z/0–9 di localStorage['myReferralCode']
  *   • link = baseUrl + '/?ref=KODE'  (salin via clipboard, atau share bila didukung)
  *   • pengunjung dengan ?ref= menerima +50 Koin & +1 Nyawa (sekali, lalu dikunci)
- *   • pengundang: counter lokal 'referralBonus' (pending) — notif "+100 Koin",
- *     baru benar-benar dibayar nanti saat ada server (lihat integration-guide.md)
+ *   • pengundang: counter lokal 'referralBonus' untuk feedback instan, dan sejak
+ *     v2.3 ada ADAPTER SERVER (setServer) -> +100 Koin dibayar backend
+ *     server/api.js saat akun baru mendaftar dengan kode ini (lihat integration-guide.md)
  *
  * UI modal dibuat sendiri oleh file ini (tidak butuh HTML tambahan), jadi bisa
  * ditempel ke game lain. Diuji headless oleh tools/web_ads_referral_test.js.
@@ -17,7 +18,8 @@ const REFERRAL_DEFAULTS = {
   gameName: 'HideSeek Online',
   baseUrl: '',                       // default: location.origin + pathname
   codeLength: 7,                     // 6–8 karakter sesuai spesifikasi
-  charset: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789',
+  // Karakter yang mudah tertukar (I/1, L/1, O/0) sengaja tidak dipakai.
+  charset: 'ABCDEFGHJKMNPQRSTUVWXYZ23456789',   // tanpa I/L/O: sesuai isValidCode() & kode server
   coinsForInvitee: 50,               // hadiah utk yang diundang
   hpForInvitee: 1,
   coinsForInviter: 100,              // hadiah utk pengundang (dicatat, dibayar saat ada server)
@@ -53,6 +55,7 @@ class ReferralSystem {
     this.onGrant = (cfg && cfg.onGrant) || null;
     this.mount = (cfg && cfg.mount) || (typeof document !== 'undefined' ? document.body : null);
     this._random = (cfg && cfg.random) || Math.random;
+    this.server = (cfg && cfg.server) || null;   // adapter backend: {getCode,stats,claim} — lihat setServer()
     if (!this.cfg.baseUrl && typeof location !== 'undefined' && location.origin) {
       this.cfg.baseUrl = location.origin + (location.pathname || '/').replace(/\/[^/]*$/, '');
     }
@@ -74,12 +77,34 @@ class ReferralSystem {
     const k = this.cfg.keys.mine;
     let code = this.storage.getItem(k);
     if (!code || !ReferralSystem.isValidCode(code)) {
-      code = this.generateReferralCode();
+      code = (this.server && this.server.getCode && this.server.getCode()) || '';
+      if (!ReferralSystem.isValidCode(code)) code = this.generateReferralCode();
       this.storage.setItem(k, code);
       this.log('kode baru dibuat: ' + code);
     }
     return code;
   }
+  /**
+   * Pasang adapter backend (dipanggil game.js setelah apiKit siap):
+   *   { getCode(): kode resmi dari server, stats(): {invited,coinsPerFriend,paidByServer},
+   *     claim(ref): Promise untuk membayar referral akun lama }
+   * Kode server ditampung di storage agar link yang sudah tersebar tidak berubah.
+   */
+  setServer(srv) {
+    this.server = srv || null;
+    if (this.server && this.server.getCode) this.setServerCode(this.server.getCode());
+    return this.server;
+  }
+  /** Ganti kode lokal dengan kode resmi dari server (hanya bila formatnya valid). */
+  setServerCode(code) {
+    const c = ReferralSystem.normalizeCode(code);
+    if (!ReferralSystem.isValidCode(c)) return false;
+    this.storage.setItem(this.cfg.keys.mine, c);
+    this.log('kode referral diambil dari server: ' + c);
+    return true;
+  }
+  /** Status pembayaran dari server (null = mode lokal/pending). */
+  getServerStats() { return (this.server && this.server.stats) ? (this.server.stats() || null) : null; }
   /** URL lengkap: https://game.com/?ref=KODE */
   getReferralLink(code) {
     const base = (this.cfg.baseUrl || '').replace(/[?#].*$/, '').replace(/\/$/, '');
@@ -283,14 +308,30 @@ class ReferralSystem {
     const code = this.getMyReferralCode(), link = this.getReferralLink(code);
     m.querySelector('#refCode').textContent = code;
     m.querySelector('#refLink').textContent = link;
-    const bonus = this.getReferralBonus();
-    m.querySelector('#refBonus').innerHTML = bonus > 0
-      ? `Teman bergabung: <b>${bonus}</b> · menunggu server: +<b>${bonus * this.cfg.coinsForInviter}</b> koin`
-      : `Belum ada teman yang gabung. Sebarkan link di atas!`;
+    this.updateModalStats(m);
     const ref = this.getReferrerCode();
     m.querySelector('#refTitle').textContent = ref ? `Kode pengundang kamu: ${ref}` : 'Undang teman, dapat koin';
     m.hidden = false;
     return m;
+  }
+  /** Segarkan baris status hadiah (dipakai saat buka modal & setelah sinkron server). */
+  updateModalStats(m) {
+    m = m || (typeof document !== 'undefined' ? document.getElementById('referralModal') : null);
+    if (!m || !m.querySelector) return null;
+    const bonus = this.getReferralBonus(), srv = this.getServerStats();
+    const box = m.querySelector('#refBonus');
+    if (!box) return null;
+    if (srv) {
+      const n = srv.invited | 0;
+      box.innerHTML = n > 0
+        ? `Teman bergabung: <b>${n}</b> · dibayar server: <b>+${n * (srv.coinsPerFriend || this.cfg.coinsForInviter)}</b> koin ✓`
+        : `Belum ada teman yang gabung. Sebarkan link di atas — tiap teman = <b>+${this.cfg.coinsForInviter} koin</b> (dibayar server).`;
+    } else {
+      box.innerHTML = bonus > 0
+        ? `Teman bergabung: <b>${bonus}</b> · menunggu server: +<b>${bonus * this.cfg.coinsForInviter}</b> koin`
+        : `Belum ada teman yang gabung. Sebarkan link di atas!`;
+    }
+    return box;
   }
   /** Alias sesuai spesifikasi. */
   showReferralPopup() { return this.showInviteModal(); }
@@ -311,8 +352,10 @@ class ReferralSystem {
   hideModal() { if (typeof document !== 'undefined') { const m = document.getElementById('referralModal'); if (m) m.hidden = true; } }
   /** Ringkasan utk UI lain / debug. */
   getStats() {
+    const srv = this.getServerStats();
     return {
       code: this.getMyReferralCode(),
+      server: srv,
       link: this.getReferralLink(),
       referrer: this.getReferrerCode(),
       claimed: this.hasClaimed(),

@@ -146,6 +146,11 @@ global.dispatchEventKey = (type, key) => { for (const fn of (winHandlers[type] |
     else { global.BungFX = m.Particles; ok('particles.js mengekspor kelas Particles', typeof m.Particles === 'function'); }
     ok(f + ' bisa di-require tanpa DOM penuh', !!m);
   }
+  const APIKIT = require(path.join(ROOT, 'web/apiKit.js'));
+  global.BungAPI = APIKIT;
+  global.window.BungAPI = APIKIT;
+  global.window.createApiClient = (extra) => new APIKIT.ApiClient(Object.assign({ storage: global.localStorage }, extra || {}));
+  ok('apiKit.js bisa di-require tanpa DOM penuh (+ createApiClient)', typeof APIKIT.ApiClient === 'function' && typeof global.window.createApiClient === 'function');
   const A = require(path.join(ROOT, 'web/adsManager.js'));
   const R = require(path.join(ROOT, 'web/referralSystem.js'));
   global.AdsManager = A.AdsManager; global.resolveAdsConfig = A.resolveAdsConfig;
@@ -434,6 +439,8 @@ console.log('\n[6] UI v2.1: partikel, shake, layar hasil (rank/XP), sensitivitas
   ok('hitung mundur hasil berhenti sendiri (interval tidak bocor)', true);
   ok('tidak ada kegagalan di blok ini', fail === before, { added: fail - before });
 }
+
+  global.__smokeBaseDone = true;                 // gate utk blok [8] (hindari saling berebut DOM)
 })().catch(e => { console.log('  \x1b[31mEXCEPTION\x1b[0m ' + (e && e.stack || e)); fail++; });
 function getRound() {
   // game.js menyimpan instance di closure boot(); ambil lewat elemen hearts -> tidak bisa,
@@ -555,6 +562,128 @@ process.on('exit', () => {
     ok('keyboard "3" mengirim skill3', /skill3/.test(String(fs.readFileSync(path.join(ROOT, 'web/game.js'), 'utf8').match(/if \(k === '3'\)[^\n]*/))), 'anchor hilang');
     ok('tidak ada exception di blok kamera/aim/Freeze', fail === before, fail - before);
   }
+  /* ---------- [8] UI v2.3: panel akun/ID game/teman (jalur OFFLINE) ---------- */
+  console.log('\n[8] UI v2.3: panel akun + teman tanpa server (mode lokal harus tetap utuh)');
+  {
+    const before = fail;
+    const G = global.hideSeekGame, ui = G && G.ui, acct = global.hideSeekAccount;
+    const sleep2 = ms => new Promise(r => setTimeout(r, ms));
+    // blok sebelumnya masih async: tunggu sampai selesai supaya kelas layar tidak saling rebut
+    for (let i = 0; i < 400 && !global.__smokeBaseDone; i++) await sleep2(25);
+    if (!global.__smokeBaseDone) await sleep2(2000);
+    ok('apiKit.js dimuat oleh harness (window.BungAPI ada)', !!(global.BungAPI && global.BungAPI.ApiClient), typeof global.BungAPI);
+    ok('game.js membuat instance akun (hideSeekAccount)', !!acct && typeof acct.sync === 'function', !!acct);
+    ok('gameAPI.account tersedia utk debug/test', !!(G && G.account && G.account.api === acct), G && Object.keys(G.account || {}));
+    await sleep2(30);                                  // health() selesai (fetch ditolak harness)
+    ok('health gagal -> online=false, checked=true (tidak ada exception)', acct.online === false && acct.checked === true, [acct.online, acct.checked]);
+    ok('status panel menulis mode lokal (bukan spinner selamanya)', /tidak aktif/.test(getEl('acctStatus').textContent), getEl('acctStatus').textContent);
+    ok('lobby menampilkan "ID: belum login"', getEl('lobbyIdTag').textContent === 'ID: belum login', getEl('lobbyIdTag').textContent);
+    ok('belum login: form masuk tampil, kartu profil tersembunyi', getEl('acctForm').className === '' && getEl('acctCard').className === 'hidden', [getEl('acctForm').className, getEl('acctCard').className]);
+
+    getEl('accountBtn').click();
+    pump(2);
+    ok('tombol AKUN membuka panel lewat manajer layar', ui.screens.current === 'accountPanel', ui.screens.current);
+    ok('daftar teman kosong diberi penjelasan (bukan area kosong)', /Belum ada teman/.test(String(getEl('friendList').children.map(c => c.textContent).join(' '))), getEl('friendList').children.length);
+    getEl('tabReg').click();
+    ok('tab DAFTAR menukar form (loginBox hidden, regBox tampil)', getEl('loginBox').className.indexOf('hidden') >= 0 && getEl('regBox').className.indexOf('hidden') < 0, [getEl('loginBox').className, getEl('regBox').className]);
+    getEl('tabLogin').click();
+    ok('tab MASUK mengembalikan form', getEl('loginBox').className.indexOf('hidden') < 0 && getEl('regBox').className.indexOf('hidden') >= 0);
+
+    getEl('addFriendBtn').click();
+    ok('tambah teman tanpa login -> diminta masuk dulu (tidak ada fetch sia-sia)', /masuk dulu/.test(getEl('acctMsg').innerHTML), getEl('acctMsg').innerHTML);
+    getEl('acctClose').click(); pump(2);
+    ok('tutup panel kembali ke layar sebelumnya', ui.screens.current !== 'accountPanel', ui.screens.current);
+
+    // jalur "login" tanpa server: pesan error, sesi TIDAK dibuat, tidak ada exception
+    getEl('loginUser').value = 'zam'; getEl('loginPass').value = 'rahasia';
+    getEl('doLogin').click();
+    await sleep2(60);
+    ok('login tanpa server -> pesan gagal, sesi tetap kosong', acct.loggedIn === false && /tidak aktif|gagal/.test(getEl('acctMsg').innerHTML), getEl('acctMsg').innerHTML);
+    getEl('doReg').click();
+    await sleep2(60);
+    ok('daftar tanpa server -> pesan gagal (tidak crash)', acct.loggedIn === false, getEl('acctMsg').innerHTML);
+    getEl('syncBtn').click();
+    await sleep2(40);
+    ok('sinkronisasi tanpa login = no-op aman', true);
+    getEl('logoutBtn').click();
+    ok('logout saat belum login tetap aman (kelas hidden lagi)', getEl('acctCard').className === 'hidden', getEl('acctCard').className);
+
+    // referral: adapter server terpasang, tapi tanpa sesi statusnya "menunggu server"
+    ok('referral punya adapter server (setServer dipasang game.js)', !!(global.hideSeekReferral && global.hideSeekReferral.server), !!(global.hideSeekReferral || {}).server);
+    ok('referral tanpa sesi: getServerStats() null + modal status lokal (perilaku lama)',
+      global.hideSeekReferral.getServerStats() === null && /Belum ada teman/.test(global.hideSeekReferral.showInviteModal().querySelector('#refBonus').innerHTML || ''), global.hideSeekReferral.getServerStats());
+    global.hideSeekReferral.recordIncomingReferral(1);
+    ok('tanpa server: bonus lokal > 0 -> modal menulis "menunggu server" (kontrak v2.2 utuh)',
+      /menunggu server/.test(global.hideSeekReferral.showInviteModal().querySelector('#refBonus').innerHTML || ''));
+    ok('kode referral lokal tetap 7 karakter aman-baca', /^[A-HJ-KM-NP-Z0-9]{7}$/i.test(global.hideSeekReferral.getMyReferralCode()), global.hideSeekReferral.getMyReferralCode());
+
+    /* ---- mode "punya sesi": suntik user + token, lalu cek tampilan & payload ---- */
+    const callsSent = [];
+    // apiKit menyimpan referensi fetch saat konstruksi -> inject lewat _fetch (didokumentasikan)
+    const realFetch = acct._fetch;
+    acct._fetch = (url, opt) => {
+      callsSent.push({ url: String(url), body: opt && opt.body, headers: opt && opt.headers });
+      const u = String(url);
+      const user = { uid: 7, name: 'Zam', login: 'zam', gameId: '1048293', refCode: 'QQW7RTZ', coins: 640, lives: 2, bonusHp: 1, xp: 1800, level: 4, best: 900, rounds: 30, invited: 2, friends: 1, room: 'K9ZM', grantedCoins: 150, grantedLives: 1 };
+      if (u.indexOf('/api/me') === 0) return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve(JSON.stringify({ user })) });
+      if (u.indexOf('/api/friends') === 0 && (!opt || opt.method !== 'POST')) {
+        return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve(JSON.stringify({ friends: [{ uid: 8, name: 'budi', gameId: '8331209', level: 3, coins: 10, best: 320, online: true, since: 5, room: 'AB23' }], incoming: [], outgoing: [] })) });
+      }
+      if (u.indexOf('/api/friends/find') === 0) return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve(JSON.stringify({ found: true, state: 'none', player: { name: 'budi', gameId: '8331209' } })) });
+      if (u.indexOf('/api/friends/request') === 0) return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve(JSON.stringify({ ok: true, state: 'pending', reqId: 'r7-8' })) });
+      if (u.indexOf('/api/leaderboard') === 0) return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve(JSON.stringify({ ok: true, rows: [{ rank: 1, name: 'Zam', gameId: '1048293', level: 4, best: 900 }] })) });
+      if (u.indexOf('/api/sync') === 0) return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve(JSON.stringify({ ok: true, user })) });
+      if (u.indexOf('/api/health') === 0) return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve(JSON.stringify({ ok: true, users: 3 })) });
+      if (u.indexOf('/room/') === 0) return Promise.resolve({ ok: false, status: 404, text: () => Promise.resolve('room relay tidak dipakai di tes ini') });
+      return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve(JSON.stringify({ ok: true, user, referral: { ok: true, coinsForInviter: 100 } })) });
+    };
+    acct.online = true; acct.checked = true; acct.token = 'tok-tes-untuk-simulasi-sesi';
+    const restored = await acct.restore();
+    ok('restore() dengan server hidup -> sesi aktif', restored.ok === true && acct.loggedIn === true, restored.status);
+    getEl('accountBtn').click();
+    await sleep2(50); pump(2);
+    ok('kartu profil tampil (ID 3+4 digit)', getEl('acctCard').className === '' && getEl('pfId').textContent === '104 8293', [getEl('acctCard').className, getEl('pfId').textContent]);
+    ok('form login disembunyikan saat sudah masuk', getEl('acctForm').className === 'hidden');
+    ok('status lobby menampilkan ID game', getEl('lobbyIdTag').textContent === 'ID game: 104 8293', getEl('lobbyIdTag').textContent);
+    ok('koin/level kartu = angka server', getEl('pfCoins').textContent === '640' && getEl('pfLevel').textContent === 'Lv 4', [getEl('pfCoins').textContent, getEl('pfLevel').textContent]);
+    ok('profil server DIADOPSI ke HUD lokal (koin 640, Lv 4)', getEl('coins').textContent === '640' && /Lv 4/.test(getEl('bestTag').textContent), [getEl('coins').textContent, getEl('bestTag').textContent]);
+    ok('referral kini memakai kode SERVER', global.hideSeekReferral.getMyReferralCode() === 'QQW7RTZ', global.hideSeekReferral.getMyReferralCode());
+    ok('modal undang menyebut "dibayar server"', /dibayar server/.test(global.hideSeekReferral.showInviteModal().querySelector('#refBonus').innerHTML || ''), global.hideSeekReferral.getServerStats());
+    ok('daftar teman dirender sebagai baris (nama + ID)', getEl('friendList').children.length === 1 && /budi/.test(getEl('friendList').children[0].children.map(c => c.textContent).join(' ')), getEl('friendList').children.map(c => c.className));
+    const frow = getEl('friendList').children[0];
+    const joinBtn = frow.children[frow.children.length - 1].children[0];
+    ok('teman dengan room aktif punya tombol Gabung', /Gabung AB23/.test(joinBtn.textContent), joinBtn.textContent);
+    joinBtn.click(); pump(2);
+    ok('tombol Gabung mengisi kode room + membuka lobby', getEl('codeInput').value === 'AB23' && ui.screens.current === 'lobby', [getEl('codeInput').value, ui.screens.current]);
+    await sleep2(40);                              // joinRoom gagal (relay dimatikan di tes) -> harus tertangkap .catch, bukan exception
+
+    getEl('accountBtn').click(); await sleep2(30);
+    getEl('friendId').value = '8331209';
+    getEl('addFriendBtn').click();
+    await sleep2(60);
+    ok('tambah teman via ID 7 digit -> POST /api/friends/find lalu request',
+      callsSent.some(c => c.url.indexOf('/api/friends/find') === 0) && callsSent.some(c => c.url.indexOf('/api/friends/request') === 0 && JSON.parse(c.body).gameId === '8331209'), callsSent.map(c => c.url).slice(-3));
+    ok('pesan ajakan terkirim ditampilkan', /ajakan terkirim/.test(getEl('acctMsg').innerHTML), getEl('acctMsg').innerHTML);
+    getEl('friendId').value = '12';
+    getEl('addFriendBtn').click();
+    ok('ID kurang dari 7 digit ditahan di klien (tanpa request)', /7 digit/.test(getEl('acctMsg').innerHTML), getEl('acctMsg').innerHTML);
+
+    const coinsBefore = G.profile.coins;
+    getEl('syncBtn').click();
+    await sleep2(60);
+    const syncCall = callsSent.filter(c => c.url.indexOf('/api/sync') === 0).pop();
+    ok('sinkronisasi mengirim angka profil (coins/xp/best/rounds)', !!syncCall && /"coins":/.test(syncCall.body) && /"best":/.test(syncCall.body), syncCall && syncCall.body);
+    ok('Authorization: Bearer <token> ikut terkirim', !!(syncCall && /Bearer /.test(syncCall.headers.authorization || '')), syncCall && syncCall.headers);
+    ok('sync tidak mengubah saldo lokal ke arah yang salah (monoton)', G.profile.coins >= 0 && G.profile.best >= 900, [G.profile.coins, G.profile.best, coinsBefore]);
+
+    getEl('logoutBtn').click(); await sleep2(20);
+    ok('logout membersihkan sesi + kembali ke form', acct.loggedIn === false && getEl('acctForm').className === '', [acct.loggedIn, getEl('acctForm').className]);
+    global.fetch = realFetch;
+    if (realFetch) acct._fetch = realFetch;
+    if (ui.screens) { const RR = getRound(); ui.screens.show(RR && RR.phase !== 'LOBBY' && RR.phase !== 'RESULT' ? 'game' : 'menu'); }   // kembalikan state layar
+    ok('tidak ada exception di blok [8]', fail === before, fail - before);
+  }
+
 })().catch(e => { console.log('  \x1b[31mEXCEPTION\x1b[0m ' + (e && e.stack || e)); fail++; });
 
 

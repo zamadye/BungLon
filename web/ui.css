@@ -419,3 +419,46 @@ tr.me td{background:rgba(61,220,132,.14);font-weight:900;border-radius:8px}
   #splash .bgimg,#menu .bgimg{animation:none!important;transform:none!important}
   #stage.shake>#game,#stage.shake>#hud{animation:none!important;transform:none!important} }
 @media (prefers-contrast:more){ .glass,#hud .pill{background:#04100b;border-color:#fff6} }
+
+/* ==========================================================================
+   UI v2.3 — "boot safety net" + panel AKUN / ID GAME / TEMAN
+   --------------------------------------------------------------------------
+   1) #splashHelp: muncul hanya bila loader menyerah (file macet/404). Prinsip
+      blueprint "user never waits on a spinner": selalu ada jalan keluar.
+   2) Panel akun memakai token yang sama dengan design system di atas
+      (satu warna = satu makna: biru = info/net, oranye = koin, ungu = aksi sosial).
+   ========================================================================== */
+#splashHelp{display:none;flex-direction:column;align-items:center;gap:8px;max-width:min(420px,92vw)}
+#splashHelp.show{display:flex;animation:fadeUp .25s ease}
+#splashErr{color:#ffd8a8;font-weight:700;max-width:40ch}
+#splashErr b{color:#fff}
+#splash .spinner.slow{animation-duration:1.6s}
+
+/* utility: hanya untuk elemen baru (tidak menimpa #lobby/#result yang punya aturan sendiri) */
+#acctCard.hidden,#regBox.hidden,#loginBox.hidden,#splashHelp.hidden,#friendInbox:empty{display:none}
+
+.formbox{display:flex;flex-direction:column;gap:8px;width:100%;
+  padding:12px;border-radius:var(--r-m);background:var(--glass);border:1px solid var(--stroke)}
+.btn.sm{min-height:38px;padding:8px 14px;font-size:13px;border-radius:var(--r-m)}
+.btn.sm:active{transform:translateY(2px)}
+.btn.on{outline:2px solid var(--hue-blue);outline-offset:2px}
+.sect{margin:14px 0 6px;font-size:12px;letter-spacing:2px;color:var(--ink-dim);text-transform:uppercase;text-align:left}
+.idcard{display:flex;flex-direction:column;align-items:center;gap:6px;margin:6px 0 10px;
+  padding:14px;border-radius:var(--r-l);background:linear-gradient(180deg,rgba(72,176,255,.16),rgba(72,176,255,.05));
+  border:1px dashed rgba(255,255,255,.32)}
+.idcard .lbl{font-size:11px;letter-spacing:3px;color:var(--ink-dim)}
+.idcard b{font:900 clamp(24px,7vw,34px)/1.1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:4px;
+  color:#bfe4ff;user-select:all;text-shadow:0 2px 0 rgba(0,0,0,.35)}
+.friends{display:flex;flex-direction:column;gap:6px;text-align:left}
+.frow{display:flex;align-items:center;gap:8px;padding:9px 11px;border-radius:var(--r-m);
+  background:var(--glass);border:1px solid var(--stroke);min-height:var(--tap)}
+.frow .av{width:26px;height:26px;flex:0 0 26px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#7cf0a6,var(--hue-green-d))}
+.frow .nm{font-weight:900}
+.frow .id{font:700 12px/1 ui-monospace,Menlo,monospace;color:var(--ink-dim);letter-spacing:1px}
+.frow .tag{margin-left:auto;display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+.frow.in{border-color:rgba(255,166,43,.5)}
+.frow.off .av{filter:grayscale(1) brightness(.7)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--hue-green);box-shadow:0 0 8px var(--hue-green)}
+.dot.off{background:#5d6f66;box-shadow:none}
+#globalBoard td:first-child,#globalBoard th:first-child{width:34px;color:var(--ink-dim)}
+#globalBoard td:nth-child(3){font:700 12px/1 ui-monospace,Menlo,monospace;letter-spacing:1px}

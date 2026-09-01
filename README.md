@@ -38,9 +38,14 @@ Assets/
 ├── Art/HideSeek/   19 sprite + background + app icon hasil generate AI (lihat Art/prompts.md)
 └── Resources/HideSeek/   fallback prefab agar project langsung bisa di-playtest
 
-web/                BUILD TANPA UNITY (bagian 10): index.html + game.js + net-server.js + assets/
-tools/              web_selftest.js (243: paritas CFG↔C# + rules), web_dom_smoke.js (143), web_ui_test.js (258),
-                    web_ads_referral_test.js (130), web_map_preview.py
+web/                BUILD TANPA UNITY (bagian 10): index.html + game.js + ui.css/uiKit.js/audioKit.js +
+                    apiKit.js + adsManager.js + referralSystem.js + sw.js/manifest + net-server.js + assets/
+server/             BACKEND AKUN (bagian 0.1): api.js (routing+rate limit) · auth.js (scrypt/JWT/GameID) ·
+                    store.js (JSON atomic). Nol dependency; datanya server/data/*.json (di-gitignore)
+tools/              uji headless tanpa npm: web_selftest.js (266: paritas CFG↔C# + App ID + dokumen),
+                    web_dom_smoke.js (184: boot + DOM tiruan + panel akun), web_ui_test.js (338: blueprint UI + apiKit),
+                    web_ads_referral_test.js (130), web_boot_test.js (50: watchdog/SW/404),
+                    server_api_test.js (137: JWT/referral/teman/ads sungguhan), web_map_preview.py, gen_web_config.js
 Tools/hideseek_art_postprocess.py   (keying/segmentasi/resize PNG art, hanya pillow)
 ```
 
@@ -87,15 +92,66 @@ Tools/hideseek_art_postprocess.py   (keying/segmentasi/resize PNG art, hanya pil
 > Detail + cara uji: **bagian 10**. Build web = demo/prototipe; rilis Play Store tetap lewat Unity.
 > Test otomatis: `node tools/web_selftest.js` (243 assertion: konstanta C# == aturan web) · `npm test` di `web/` menjalankan 4 suite (774 assertion, 0 FAIL).
 
+
+---
+
+## 0.1) Backend akun: JWT + referral + Game ID + teman (tanpa `npm install` juga)
+
+`server/` adalah HTTP API murni Node (hanya modul bawaan `http`/`crypto`/`fs`) dan **sudah
+otomatis di-mount** oleh `web/net-server.js`, jadi game, relay room, dan API berada di satu
+origin (Service Worker tidak perlu CORS). Kredensial dibaca dari `.env` (lihat `.env.example`):
+
+```bash
+node web/net-server.js --port 8080     # static + /room/* (relay) + /api/* (akun)
+node server/api.js  --port 3000        # opsional: API saja (di depan nginx/PM2)
+node tools/server_api_test.js          # uji signup/login/JWT/referral/teman/ads
+```
+
+* **Auth JWT** — `POST /api/signup` & `POST /api/login` mengembalikan `{ token, user }`.
+  Token HS256 disimpan di `localStorage` kunci `hideseek_jwt` dan dikirim sebagai
+  `Authorization: Bearer`. Password di-hash `scrypt` (memory-hard, salt acak per user) dan tidak
+  pernah keluar dari server. Ganti `JWT_SECRET` sebelum publish; bila kosong, server membuat
+  secret acak di `server/data/.secret`.
+* **Data** — JSON file di `server/data/` (`users.json`, `referrals.json`, `friendreqs.json`,
+  `adclaims.json`, `rooms.json`); ditulis atomic dan di-flush saat SIGINT/SIGTERM
+  (`--data-dir <path>` untuk memindahkannya). Untuk multi-instance, ganti dengan Postgres/Supabase.
+* **Form masuk/daftar** — panel **AKUN** di game (`web/index.html` + modul akun di `web/game.js`)
+  memakai nama pengguna + kata sandi minimal `PASS_MIN` karakter (default 6). Angka lokal
+  (koin/XP/rekor/HP) dikirim sebagai `migrate` saat masuk, lalu server yang menentukan saldo final.
+* **Referral dibayar server** — tiap akun punya kode; form daftar punya kolom "kode teman" dan
+  link `?ref=` dipakai otomatis saat masuk. Bonus dibayar **hanya setelah teman benar-benar
+  mendaftar/masuk** (klik link sendiri tidak menghasilkan apa pun). Default: 100 koin pengundang,
+  50 koin + 1 HP untuk yang diajak (`REF_COINS_INVITER`, `REF_COINS_INVITEE`, `REF_HP_INVITEE`).
+* **Game ID** — ID 7 digit per akun (contoh `104 8293`, format 3+4 digit di UI) untuk menambah
+  teman: `POST /api/friends/find` → `POST /api/friends/request` → `GET /api/friends`;
+  tiap pertemanan memberi koin ke kedua pihak (`FRIEND_COINS`).
+* **Reward ads** — dicatat server-side per `nonce` + cooldown + batas harian
+  (`POST /api/ads/reward`, `GET /api/ads/state`) sehingga tidak bisa diklaim dua kali. Validasi
+  callback SSV AdMob/Unity masih perlu untuk produksi — lihat `integration-guide.md`.
+* **Jembatan web → Unity** — `web/apiKit.js` (`window.BungAPI`, `createApiClient()`) adalah klien
+  API tanpa dependensi yang dipakai `web/game.js`. Semua metodenya **tidak pernah melempar**:
+  tanpa server, panel akun masuk *mode lokal* dan permainan tetap jalan penuh. API yang sama bisa
+  dipanggil dari Unity (UnityWebRequest) karena bentuknya JSON polos.
+* **App ID Photon** project ini `644b49fc-42a6-4a58-a247-163ae36caa12` (region `asia`) — sudah ada
+  di `Assets/Scripts/Core/HideSeekConstants.cs`, `.env.example` (`PHOTON_APP_ID`/`PHOTON_REGION`),
+  dan README §1.
+
 ---
 
 ## 1) Setup Photon PUN 2 (App ID)
 
 1. Daftar di [dashboard.photonengine.com](https://dashboard.photonengine.com) →
    **Realtime** → salin **App ID** (Free tier = 20 CCU).
+   **App ID project ini: `644b49fc-42a6-4a58-a247-163ae36caa12`** — sudah tertulis di
+   `Assets/Scripts/Core/HideSeekConstants.cs` (`PhotonAppId`) dan `.env.example`
+   (`PHOTON_APP_ID`), sehingga clone ini bisa langsung connect tanpa setting manual.
 2. Di Unity: **Window → Photon → Photon Unity Networking → Highlight Settings**
    (atau pilih aset `Assets/Photon/PhotonUnityNetworking/Resources/PhotonServerSettings.asset`).
-3. Isi field **App ID Realtime**. Sekalian atur:
+3. Isi field **App ID Realtime** = `644b49fc-42a6-4a58-a247-163ae36caa12` (atau biarkan kosong:
+   `NetworkManager.Awake()` menyalinnya dari `HideSeekConstants` untuk App ID, App Version, dan
+   region **hanya bila** field di `PhotonServerSettings` masih kosong — nilai manual Anda tidak
+   pernah ditimpa). Cara paling rapi: menu **HideSeek → Setup → 7. Terapkan App ID + Region
+   Photon**, yang menulis ketiganya permanen ke aset + menghapus cache region. Sekalian atur:
    - **Region**: kosongkan = PUN otomatis memilih *Best Region*. Untuk game ini **disarankan diisi
      `asia`** (field *Fixed Region* di `PhotonServerSettings`) supaya semua pemain Indonesia masuk
      region yang sama — room yang dibuat di `asia` tidak akan terlihat oleh klien yang connect ke
@@ -104,7 +160,10 @@ Tools/hideseek_art_postprocess.py   (keying/segmentasi/resize PNG art, hanya pil
    - **App Version**: samakan dengan `HideSeekConstants.GameVersion` (`1.0.0`).
      Player dengan App Version berbeda tidak akan ketemu di matchmaking.
    - **Protocol**: `WebRPC`/UDP default (UDP = `Native` = paling hemat; WebSocket hanya perlu untuk WebGL).
-4. Alternatif dari kode: isi `HideSeekConstants.PhotonAppId` (lihat komentar di file itu).
+4. Alternatif dari kode: ubah `HideSeekConstants.PhotonAppId` / `PhotonRegion` lalu jalankan
+   menu Setup 7 (lihat komentar di file itu). Ganti App ID = ganti proyek Photon = room lama
+   milik project lain tidak akan terlihat; `AppVersion` (= `GameVersion`) memisahkan versi
+   client agar tidak saling join antar build.
 5. Untuk pengujian tanpa server: centang **Offline Mode** di `NetworkManager`
    (Multiplayer Editor window: *Edit → Play* 2x).
 
@@ -385,6 +444,31 @@ node tools/web_dom_smoke.js   # 143 assertion: lapisan browser (loader, renderer
                               #   UI v2 + v2.1 + kamera/aim/Freeze v2.2) dijalankan di DOM tiruan
 python3 tools/web_map_preview.py   # PNG QC peta: zoning tile + spot prop + ring spawn (ArtRaw/)
 ```
+
+### UI/UX v2.3 (panel AKUN: JWT + Game ID + teman — dan boot yang mustahil nyangkut)
+
+Dua hal yang dulu bikin build web "kurang jadi" sekarang ditangani: **akun/teman yang benar-benar
+server-side** dan **splash yang tidak mungkin menggantung**.
+
+| Bagian | File | Isi |
+| --- | --- | --- |
+| Backend akun | `server/api.js` · `server/auth.js` · `server/store.js` | HTTP API Node nol-dependency: signup/login (JWT HS256 + scrypt), sinkronisasi progres, referral yang **dibayar server**, Game ID 7 digit + pertemanan, reward ads dengan nonce/cooldown/kuota, leaderboard. JSON file di `server/data/` (atomic + flush saat SIGINT). Rutenya di-mount `web/net-server.js` pada `/api/*` |
+| Klien API | `web/apiKit.js` | kelas `ApiClient` (`window.BungAPI`, `window.createApiClient`): 17 metode (`signup login restore me sync referral claimReferral findPlayer friends addFriend acceptFriend removeFriend announceRoom adReward adState leaderboard health`), timeout, `Authorization: Bearer`, `401` → hapus sesi, balasan `{user}` → adopsi saldo. **Tidak pernah melempar** — offline = `{ ok:false, offline:true }` |
+| Panel AKUN | `web/index.html` (`#accountPanel`) + modul akun di `web/game.js` + `ui.css` | dua tab (MASUK / DAFTAR + kolom kode teman), kartu profil (ID game `104 8293` monospace yang bisa di-tap-untuk-copy, koin, level, rekor, teman), daftar teman + **Tambah teman via ID game** + tombol **Gabung `<room>`** yang mengisi kode room di lobby, tombol sinkron & keluar, papan skor global. Dibuka dari `#accountBtn` (menu) & `#lobbyAccountBtn`; musik tidak berhenti saat panel tampil |
+| Boot safety net | `game.js` (`bootFlag`/`oneAsset`/`settleBoot`/`BungBoot`) + `web/sw.js` `v2.3` | tiap aset punya `ASSET_TIMEOUT_MS` (4,2 dtk) dan keseluruhan boot dijaga `BOOT_WATCHDOG_MS` (7 dtk) → splash **selalu** menutup; aset hilang/lambat dilaporkan sebagai baris `⏱`/`✗` di `#splashHelp` dengan tombol **LANJUTKAN…** (main dengan warna fallback `TILE_RGB_FALLBACK`) dan **↻ MUAT ULANG BERSIH** (`hardReload`, membersihkan cache SW + query). Service Worker tidak lagi membalas `respondWith(null)` untuk `fetch()` tanpa header (penyebab hang sebenarnya) dan tidak meng-cache `/api/*` & `/room/*` |
+| Uji headless | `tools/web_boot_test.js` (50) · `tools/server_api_test.js` (137) · `tools/web_ui_test.js` grup `[G]` (80) · `tools/web_dom_smoke.js` grup `[8]` (41) | boot diuji 4 mode (`ok/slow/404/nouikit`) di DOM tiruan; backend dijalankan betulan di port sementara lalu kontraknya dibandingkan dengan `apiKit.js` (16 rute) dan `HIDESEEK_CONFIG` |
+
+Menjalakan semuanya (satu origin, tanpa `npm install`):
+
+```bash
+cp .env.example .env         # opsional: JWT_SECRET, REF_*, ADS_*, PHOTON_APP_ID
+node web/net-server.js --port 8080      # game + relay room + /api
+cd web && npm test                      # 6 suite, 1105 assertion, semua offline
+```
+
+Bila API tidak dinyalakan, game **tetap jalan 100 %**: panel akun menulis
+`server akun tidak aktif — mode lokal`, referral kembali ke mode lokal (bonus menunggu server),
+dan skor tetap masuk `localStorage['hideseek_scores']`.
 
 ### UI/UX v2.2 (kamera, aim Prop, skill Bekukan + port HUD ke Unity)
 

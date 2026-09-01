@@ -47,12 +47,21 @@ namespace HideSeek.Core
         // ------------------------------------------------------------------
 
         /// <summary>
-        /// App ID PUN2 "Realtime".
-        /// Di-isi dari PhotonDashboard (Project -> Realtime -> App ID).
-        /// Jika string ini masih kosong, NetworkManager akan memakai nilai pada
-        /// Resources/PhotonServerSettings.asset (cara yang lebih umum).
+        /// App ID PUN2 "Realtime" (PhotonDashboard -> Project -> Realtime -> App ID).
+        /// Dipakai NetworkManager di Awake HANYA bila Resources/PhotonServerSettings.asset
+        /// masih kosong, jadi project baru bisa langsung connect tanpa setting manual.
+        /// Setelah Photon diimport, jalankan menu "HideSeek > Setup > 7" untuk menuliskan
+        /// nilai ini permanen ke PhotonServerSettings (disarankan sebelum build).
         /// </summary>
-        public const string PhotonAppId = "";
+        public const string PhotonAppId = "644b49fc-42a6-4a58-a247-163ae36caa12";
+
+        /// <summary>
+        /// Fixed region Photon Cloud. "asia" = semua pemain Indonesia masuk cluster yang
+        /// sama (room yang dibuat di asia tidak terlihat oleh klien di eu/jp).
+        /// Kosongkan untuk memakai "Best Region" otomatis. Setelah mengubah region di
+        /// PhotonServerSettings, tekan Reset di inspektornya supaya preferensi lama dibuang.
+        /// </summary>
+        public const string PhotonRegion = "asia";
 
         /// <summary>Nama typed lobby. Typed lobby memisahkan room list game ini dari project lain.</summary>
         public const string LobbyName = "hideseek";

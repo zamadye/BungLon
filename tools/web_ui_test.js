@@ -530,12 +530,25 @@ console.log('\n[F] UI v2.2: kamera follow+zoom, aim Prop, Freeze');
       return ok1 && ok2;
     })(), 'aim + fallback');
     ok('usePropSwap menolak nama di luar radius (tidak bisa teleport-wujud)', (() => {
+      // Deterministik di peta acak: cari dua prop yang saling jauh & berbeda nama; pemain
+      // diletakkan DI ATAS prop pertama (jadi selalu ada kandidat lokal utk fallback).
+      // (Dulu pemain ditaruh di (0,0) -> kadang tidak ada prop di sekitarnya sama sekali.)
       h.propDef = null; h.cdHider = 0;
-      const far = r.map.props.map(q => q.def.name).filter(n => !cand.some(c => c.name === n))[0];
-      if (!far) return true;
-      h.x = 0; h.y = 0;
-      const got = r.usePropSwap(h, far);
-      return got === true && h.propDef && h.propDef.name !== far;   // tetap swap, tapi bukan prop jauh
+      const nearR = Math.max(0.9, CFG.propAimRadius * 0.6);
+      let pick = null;
+      for (const a of r.map.props) {
+        const nearNames = new Set(r.map.props.filter(q => Math.hypot(q.wx - a.wx, q.wy - a.wy) <= nearR + 1e-6).map(q => q.def.name));
+        for (const b of r.map.props) {
+          if (b.def === a.def || nearNames.has(b.def.name)) continue;
+          const d = Math.hypot(b.wx - a.wx, b.wy - a.wy);
+          if (d > nearR && (!pick || d > pick.d)) pick = { d, a, b };
+        }
+      }
+      if (!pick) return true;                                  // peta terlalu sempit: tidak ada yang bisa diuji
+      h.x = pick.a.wx; h.y = pick.a.wy; h.cdHider = 0; h.propDef = null;
+      const want = pick.b.def.name;
+      const got = r.usePropSwap(h, want);
+      return got === true && !!h.propDef && h.propDef.name !== want;   // tetap swap, tapi ke prop TERDEKAT
     })(), 'fallback ke kandidat lokal');
     ok('useFreeze: Seeker dalam radius melambat + pemakai terpaku + cooldown sendiri', (() => {
       h.x = 0; h.y = 0; h.cdFreeze = 0; h.rootUntil = 0; h.role = 0;
@@ -580,6 +593,126 @@ console.log('\n[F] UI v2.2: kamera follow+zoom, aim Prop, Freeze');
   ok('audioKit: resep SFX freeze & aim ada', /\n\s*freeze: \[/.test(auKit) && /\n\s*aim: \[/.test(auKit), '');
   ok('sw.js: Icon_Freeze ikut di-precache', /Icon_Freeze\.png/.test(swSrc), '');
 }
+
+  /* ============ [G] UI v2.3: apiKit (akun JWT) + panel AKUN/ID/TEMAN ============ */
+  console.log('\n[G] UI v2.3: apiKit.js + panel akun/ID game/teman + referral berbayar server');
+  {
+    const kit = rd('apiKit.js');
+    const { ApiClient, KEYS } = require(WEB('apiKit.js'));
+    const before = fail;
+
+    /* ---- memori/penyimpanan ---- */
+    const mem = (() => { const m = new Map(); return { getItem: k => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: k => m.delete(k) }; })();
+    const calls = [];
+    const mkClient = (respond) => new ApiClient({
+      storage: mem,
+      fetch: (url, opt) => {
+        calls.push({ url: String(url), opt: opt || {} });
+        const r = respond(String(url), opt || {});
+        return Promise.resolve({ ok: r.status < 400, status: r.status, text: () => Promise.resolve(JSON.stringify(r.body || {})), headers: { get: () => 'application/json' } });
+      },
+    });
+
+    ok('apiKit diekspor sebagai window.BungAPI + createApiClient', /window\.BungAPI = \{ ApiClient, KEYS \}/.test(kit) && /window\.createApiClient =/.test(kit));
+    ok('key localStorage sesi: hideseek_jwt + hideseek_user', KEYS.token === 'hideseek_jwt' && KEYS.user === 'hideseek_user');
+
+    /* ---- offline: TIDAK pernah throw, selalu {ok:false, offline:true} ---- */
+    const dead = new ApiClient({ storage: mem, fetch: () => Promise.reject(new Error('ECONNREFUSED')) });
+    const off = await dead.health();
+    ok('server mati -> {ok:false, offline:true} (game tetap jalan normal)', off.ok === false && off.offline === true, off);
+    ok('setelah gagal, online=false & checked=true', dead.online === false && dead.checked === true);
+    const offl = await dead.login({ user: 'a', pass: 'b' });
+    ok('login saat offline tidak melempar', offl.ok === false && offl.offline === true, offl);
+    const noFetch = new ApiClient({ storage: mem, fetch: null });
+    ok('fetch tidak ada sama sekali -> tetap aman', (await noFetch.signup({})).ok === false);
+
+    /* ---- signup/login: token disimpan, profil di-cache ---- */
+    let c = mkClient((url) => url.indexOf('/api/signup') === 0
+      ? { status: 201, body: { token: 'T.1.abc', user: { uid: 7, name: 'Zam', login: 'zam', gameId: '1048293', refCode: 'ABC1234', coins: 50, lives: 1, xp: 0, level: 1, best: 0, rounds: 0, invited: 1, friends: 0 } } }
+      : { status: 200, body: { ok: true } });
+    const su = await c.signup({ name: 'Zam', user: 'zam', pass: 'rahasia', ref: 'zz' });
+    ok('signup sukses -> token + user tersimpan di storage', su.ok === true && mem.getItem(KEYS.token) === 'T.1.abc' && /1048293/.test(mem.getItem(KEYS.user) || ''), mem.getItem(KEYS.token));
+    ok('loggedIn true setelah signup', c.loggedIn === true && c.user.gameId === '1048293');
+    ok('body signup memuat name/user/pass/ref', JSON.parse(calls[calls.length - 1].opt.body).ref === 'zz', calls[calls.length - 1].opt.body);
+    ok('baseUrl kosong => URL relatif (satu origin dgn net-server.js)', /^\/api\/signup$/.test(calls[calls.length - 1].url), calls[calls.length - 1].url);
+
+    c = mkClient((url) => url.indexOf('/api/me') === 0 ? { status: 200, body: { user: { uid: 7, name: 'Z', gameId: '1048293', coins: 300 } } } : { status: 200, body: { ok: true } });
+    let changed = 0;
+    c.onChange = () => changed++;
+    await c.restore();
+    ok('restore() memakai token tersimpan (header authorization)', /Bearer T\.1\.abc/.test(JSON.stringify(calls[calls.length - 1].opt.headers)), calls[calls.length - 1].opt.headers);
+    ok('onChange dipanggil saat profil berubah', changed >= 1, changed);
+
+    /* ---- 401 -> sesi dibuang otomatis ---- */
+    c = mkClient(() => ({ status: 401, body: { error: 'login dulu (kadaluarsa)' } }));
+    c.token = 'kadaluarsa'; c.user = { uid: 1 };
+    const ex = await c.get('me');
+    ok('token kedaluwarsa -> logout otomatis, tanpa exception', ex.ok === false && c.token === '' && ex.status === 401, ex);
+
+    /* ---- bentuk payload sync/ad ---- */
+    c = mkClient(() => ({ status: 200, body: { ok: true, user: { uid: 1, name: 'x', gameId: '1000000', coins: 10, lives: 0, xp: 0, level: 1, best: 0, rounds: 0 } } }));
+    c.token = 't'; c.user = { uid: 1, name: 'x', gameId: '1000000' };
+    await c.sync({ coins: 4200, xp: 1800, best: 900, rounds: 12, lives: 2, bonusHp: 1 });
+    const syncBody = JSON.parse(calls[calls.length - 1].opt.body);
+    ok('sync mengirim angka bulat (bukan objek acak)', syncBody.coins === 4200 && syncBody.xp === 1800 && syncBody.best === 900 && syncBody.rounds === 12, syncBody);
+    ok('sync TIDAK pernah mengirim password/token di body', !/pass|token/.test(calls[calls.length - 1].opt.body), calls[calls.length - 1].opt.body);
+    await c.adReward('bonus_coins', 'ad123');
+    ok('adReward -> /api/ads/reward + kind/nonce', /\/api\/ads\/reward$/.test(calls[calls.length - 1].url) && syncEq(calls[calls.length - 1].opt.body, { kind: 'bonus_coins', nonce: 'ad123' }), calls[calls.length - 1].opt.body);
+    await c.announceRoom('k9z');
+    ok('announceRoom -> /api/room (kode di-uppercase oleh server)', /\/api\/room$/.test(calls[calls.length - 1].url) && /k9z/.test(calls[calls.length - 1].opt.body));
+    await c.addFriend('104 8293');
+    ok('addFriend mengirim gameId apa adanya (server yang membersihkan)', /"gameId":"104 8293"/.test(calls[calls.length - 1].opt.body), calls[calls.length - 1].opt.body);
+    function syncEq(s, o) { try { const j = JSON.parse(s); return Object.keys(o).every(k => j[k] === o[k]); } catch (e) { return false; } }
+
+    /* ---- util tampilan ---- */
+    ok('fmtGameId 7 digit -> 3+4 (mudah dibacakan)', ApiClient.fmtGameId('1048293') === '104 8293' && ApiClient.fmtGameId('104-829 3') === '104 8293', ApiClient.fmtGameId('1048293'));
+    ok('fmtGameId aman utk nilai aneh', ApiClient.fmtGameId('') === '' && ApiClient.fmtGameId(null) === '' && ApiClient.fmtGameId('12') === '12');
+    ok('digitsOnly membersihkan spasi/tanda', ApiClient.digitsOnly(' 104-829 3 ') === '1048293');
+    ok('agoLabel lokal (menit/jam/hari)', ApiClient.agoLabel(5) === 'baru saja' && /mnt/.test(ApiClient.agoLabel(180)) && /jam/.test(ApiClient.agoLabel(7200)) && /hari/.test(ApiClient.agoLabel(100000)));
+    ok('logout membuang token & cache profil', (() => { c.logout(); return c.token === '' && c.user === null && mem.getItem(KEYS.token) === null; })());
+    ok('semua request memakai cache: no-store (tidak dibelokkan service worker ke cache)', calls.every(x => x.opt.cache === 'no-store'), calls.slice(0, 2).map(x => x.opt.cache));
+
+    /* ---- panel akun: kepatuhan blueprint (touch target + a11y) ---- */
+    ok('index.html: panel #accountPanel bertipe .screen (dikelola manajer layar)', /<div id="accountPanel" class="screen">/.test(html));
+    for (const id of ['accountBtn', 'lobbyAccountBtn', 'acctClose', 'acctStatus', 'acctForm', 'acctCard', 'tabLogin', 'tabReg', 'loginUser', 'loginPass', 'doLogin', 'regName', 'regUser', 'regPass', 'regRef', 'doReg', 'acctMsg', 'pfId', 'copyIdBtn', 'friendId', 'addFriendBtn', 'friendList', 'friendInbox', 'globalBoard', 'lobbyIdTag', 'pfCoins', 'pfLevel', 'pfBest', 'pfFriends'])
+      ok(`#${id} ada di index.html (dipakai game.js)`, new RegExp('id="' + id + '"').test(html), id);
+    ok('input akun: autocomplete benar (password manager tidak bingung)', /id="loginPass"[^>]*type="password"[^>]*autocomplete="current-password"/.test(html) && /autocomplete="new-password"/.test(html) && /autocomplete="username"/.test(html));
+    ok('form daftar: nama tampilan max 16 karakter (sama seperti Unity/lobby)', /id="regName"[^>]*maxlength="16"/.test(html) && /id="regUser"[^>]*maxlength="16"/.test(html));
+    ok('field ID teman memakai inputmode=numeric (keyboard angka di HP)', /id="friendId"[^>]*inputmode="numeric"/.test(html));
+    ok('ui.css: ID game tampil monospace + user-select:all (sekalipun di HP)', /\.idcard b\{[^}]*ui-monospace[^}]*user-select:all/.test(css));
+    ok('ui.css: baris teman punya min-height >= 44px (touch target)', /\.frow\{[^}]*min-height:var\(--tap\)/.test(css), '');
+    ok('ui.css: status online memakai titik hijau / .dot.off abu-abu', /\.dot\{[^}]*--hue-green/.test(css) && /\.dot\.off\{/.test(css));
+    ok('ui.css: #acctForm/#acctCard/#regBox/#loginBox bisa disembunyikan', /#acctCard\.hidden,#regBox\.hidden,#loginBox\.hidden/.test(css));
+    ok('ui.css: formbox = kartu glass sesuai design system', /\.formbox\{[^}]*background:var\(--glass\)/.test(css));
+    ok('game.js: panel dibuka lewat manajer layar (accountPanel terdaftar)', /SCREEN_NAMES = \[[^\]]*'accountPanel'/.test(gameJs), (gameJs.match(/const SCREEN_NAMES = \[[^\]]*\]/) || [''])[0]);
+    ok('game.js: tombol AKUN dipasang di menu DAN lobby', /onClick\('accountBtn', openAccount\)/.test(gameJs) && /onClick\('lobbyAccountBtn', openAccount\)/.test(gameJs));
+    ok('game.js: tanpa server, status panel jujur (mode lokal)', /server akun tidak aktif/.test(gameJs));
+    ok('game.js: koin/level HUD ikut diadopsi dari server (adoptServer)', /function adoptServer\(u\)/.test(gameJs) && /profile\.coins = Math\.max\(0, u\.coins \| 0\)/.test(gameJs));
+    ok('game.js: sinkron otomatis tiap akhir ronde', /if \(account && account\.loggedIn\) acctAfterRound\(\)/.test(gameJs));
+    ok('game.js: reward iklan dilaporkan ke server dengan nonce', /acctReportAd\(placement, adNonce\)/.test(gameJs) && /const adNonce = 'ad' \+ Date\.now\(\)/.test(gameJs));
+    ok('game.js: kode room diumumkan ke teman (host & join) + dibersihkan saat keluar',
+      /acctAnnounceRoom\(j\.room\)/.test(gameJs) && /acctAnnounceRoom\(code\)/.test(gameJs) && /acctAnnounceRoom\(''\)/.test(gameJs));
+    ok('game.js: daftar teman dibangun dengan createElement (bukan innerHTML mentah)', /function friendRow\(f, opt\)/.test(gameJs) && /box\.innerHTML = '';\s*\n\s*const list = \(j && j\.friends\)/.test(gameJs));
+    ok('game.js: tombol "Gabung <room>" mengisi kode room lalu join', /Gabung ' \+ f\.room/.test(gameJs) && /ci\.value = f\.room/.test(gameJs));
+    ok('game.js: validasi ID 7 digit di klien (pesan jelas)', /ID game = <b>7 digit<\/b>/.test(gameJs));
+    ok('game.js: apiKit dimuat lewat window.createApiClient (opsional)', /typeof window\.createApiClient === 'function'/.test(gameJs));
+
+    /* ---- referralSystem: adapter server ---- */
+    const R = require(WEB('referralSystem.js'));
+    const memR = (() => { const m = new Map(); return { getItem: k => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: k => m.delete(k) }; })();
+    const rs = new R.ReferralSystem({ storage: memR, notify: () => { } });
+    ok('referral: tanpa server -> kode lokal 7 char & charset aman (tanpa I/L/O), status "menunggu server"',
+      /^[A-HJ-KM-NP-Z0-9]{7}$/i.test(rs.getMyReferralCode()) && rs.getServerStats() === null && /ABCDEFGHJKMNPQRSTUVWXYZ/.test(rs.cfg.charset), rs.getMyReferralCode());
+    const codeBefore = rs.getMyReferralCode();
+    rs.setServer({ getCode: () => 'QQW7RTZ', stats: () => ({ invited: 3, coinsPerFriend: 100, paidByServer: true }) });
+    ok('referral.setServer memakai kode resmi server (link lama tetap konsisten)', rs.getMyReferralCode() === 'QQW7RTZ' && rs.getMyReferralCode() !== codeBefore, rs.getMyReferralCode());
+    ok('referral.setServer menolak kode tidak valid (tetap pakai yang lama)', (() => { const r = new R.ReferralSystem({ storage: memR }); r.setServerCode('iL0'); return r.getMyReferralCode() === 'QQW7RTZ'; })());
+    ok('referral.getStats().server berisi status pembayaran', rs.getStats().server.invited === 3 && rs.getStats().server.paidByServer === true, rs.getStats().server);
+    ok('referral.getPendingCoins tetap utk mode lokal', rs.getPendingCoins() === 0);
+    ok('game.js memasang adapter server ke referral (getCode/stats/claim)', /referral\.setServer\(\{[\s\S]{0,400}claim: code => account\.claimReferral\(code\)/.test(gameJs));
+
+    ok('tidak ada exception di blok [G]', fail === before, fail - before);
+  }
 
   console.log(`\n=== web_ui_test: ${pass} PASS, ${fail} FAIL ===`);
   process.exitCode = fail ? 1 : 0;

@@ -38,6 +38,13 @@ window.HIDESEEK_CONFIG = {
     codeLength: 7,
     welcomeSeconds: 6,
   },
+  // Backend akun (server/api.js): signup/login JWT + referral + ID game/teman.
+  // baseUrl '' = same-origin (node web/net-server.js sudah men-mount /api di port yang sama).
+  api: {
+    baseUrl: '',                          // mis. 'https://api.example.com' (env: API_BASE_URL)
+    timeoutMs: 6000,                      // batas tunggu per request (env: API_TIMEOUT_MS)
+    autoSync: true,                       // kirim progres ke server tiap akhir ronde (env: API_AUTO_SYNC)
+  },
   // Saldo awal profil (biar playtest tidak mulai dari nol).
   economy: {
     startCoins: 0,

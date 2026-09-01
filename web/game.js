@@ -869,15 +869,104 @@ if (typeof document !== 'undefined') (function boot() {
     'Prop_Table', 'Prop_Chair', 'Prop_FlowerPot', 'Prop_Crate', 'Tile_Grass', 'Tile_Sand', 'Tile_Stone',
     'Tile_Wood', 'Icon_Camouflage', 'Icon_PropSwap', 'Icon_Radar', 'Icon_SonicBlast', 'Icon_Revive', 'Bg_Lobby'];
   const SPR = {}, tintCache = new Map();
-  let pending = names.length, assetsReady = false, tileRgbDone = false, loaded = 0;
-  // Semua sprite (atau error) sudah datang -> warna tile boleh dihitung.
-  const onAll = () => { if (--pending <= 0) { assetsReady = true; startGame(); } };
+  let pending = names.length, assetsReady = false, tileRgbDone = false, loaded = 0, bootSettled = false;
+
+  /* ---------- BOOT SAFETY NET (v2.3) ----------
+     Gejala yang diperbaiki: "game dibuka tapi stuck di loading awal". Penyebab yang
+     mungkin: 1 PNG 404, koneksi/proxy yang menggantung, atau service worker lama yang
+     menyimpan cache rusak — semuanya bisa membuat Image.onload/onerror TIDAK pernah
+     fired, sehingga baris "MEMUAT 95%" berhenti di situ selamanya. Solusi:
+       • tiap sprite punya batas waktunya sendiri (ASSET_TIMEOUT_MS) -> dilewati;
+       • watchdog global (BOOT_WATCHDOG_MS) -> splash selalu ditutup apa pun yang terjadi;
+       • panel #splashHelp + tombol "lanjutkan" / "muat ulang bersih" utk pengguna;
+       • window.BungBoot -> bisa dibaca dari console saat mendiagnosis.
+     Warna tile punya fallback (sama seperti konstanta Unity), jadi game tetap
+     playable walaupun semua sprite gagal. */
+  /** Boleh dioverride dari URL (?assetTimeout=200&bootTimeout=520) — dipakai test headless. */
+  function bootFlag(key, def, min) {
+    try {
+      const m = new RegExp('[?&]' + key + '=(\\d+)').exec((typeof location !== 'undefined' && location.search) || '');
+      return m ? Math.max(min, Number(m[1])) : def;
+    } catch (e) { return def; }
+  }
+  const ASSET_TIMEOUT_MS = bootFlag('assetTimeout', 4200, 100), BOOT_WATCHDOG_MS = bootFlag('bootTimeout', 7000, 500);
+  const BOOT = { total: names.length, done: 0, missing: [], slow: [], state: 'loading', t0: Date.now(), ms: 0 };
+  if (typeof window !== 'undefined') window.BungBoot = BOOT;
+  /** Sprite dianggap terpakai hanya kalau benar-benar sudah ter-decode. */
+  function imgReady(im) { return !!(im && (im.naturalWidth || im.width)); }
+  /** Tulis peringatan di splash + munculkan tombol penyelamat (dan toast di game). */
+  function bootWarn(msg, toastMs) {
+    if (BOOT.state === 'loading') BOOT.state = 'warn';
+    const e = document.getElementById('splashErr'); if (e) e.innerHTML = msg;
+    const h = document.getElementById('splashHelp'); if (h) h.className = 'show';
+    const sp = document.getElementById('splashSpinner'); if (sp) sp.className = 'spinner slow';
+    if (toastMs !== 0) { try { toast(msg.replace(/<[^>]+>/g, ''), toastMs || 6000); } catch (err) { } }
+  }
+  /**
+   * Tutup fase loading — dipanggil dari 3 jalur (semua selesai / sebagian gagal /
+   * watchdog). Idempoten, dan startGame() dibungkus try/catch supaya error sekecil
+   * apa pun tetap dijelaskan ke pengguna, bukan menjadi layar hitam.
+   */
+  function settleBoot(state) {
+    if (bootSettled) return;
+    bootSettled = true;
+    assetsReady = true;
+    BOOT.state = state || 'ready';
+    BOOT.ms = Date.now() - BOOT.t0;
+    try { startGame(); } catch (err) {
+      console.error('❌ startGame() gagal:', err);
+      bootWarn('Game gagal dimulai: <b>' + (((err && err.message) || err) + '').slice(0, 120) + '</b>');
+    }
+    hideSplash();
+    if (BOOT.missing.length) {
+      const extra = BOOT.missing.length > 3 ? ' +' + (BOOT.missing.length - 3) + ' lainnya' : '';
+      bootWarn(BOOT.missing.length + ' aset tidak termuat (<b>' + BOOT.missing.slice(0, 3).join(', ') + extra +
+        '</b>) — game jalan dengan warna fallback. Pastikan membuka lewat server, bukan file: <b>node web/net-server.js</b>.');
+    } else if (BOOT.slow.length) {
+      bootWarn('Jaringan lambat: ' + BOOT.slow.length + ' aset dilewati tanpa menunggu. Tekan <b>MUAT ULANG BERSIH</b> kalau tampilan kurang.', 5000);
+    }
+  }
+  /** Satu sprite selesai (sukses atau gagal) -> Update bar, dan mungkin menutup boot. */
+  function oneAsset(name, okFlag, slow) {
+    loaded++; pending = Math.max(0, pending - 1);
+    BOOT.done = loaded;
+    if (!okFlag && BOOT.missing.indexOf(name) < 0) BOOT.missing.push(name);
+    if (slow && BOOT.slow.indexOf(name) < 0) BOOT.slow.push(name);
+    splashProgress(loaded);
+    if (pending === 0) settleBoot(BOOT.missing.length ? 'partial' : 'ready');
+  }
   for (const n of names) {
     const img = new Image();
-    img.onload = img.onerror = () => { loaded++; splashProgress(loaded); onAll(); };
+    let settledOne = false;
+    const timer = setTimeout(() => {
+      if (settledOne) return;
+      settledOne = true;
+      console.warn('⏱ aset terlalu lama, dilewati: assets/' + n + '.png');
+      oneAsset(n, imgReady(img), true);
+    }, ASSET_TIMEOUT_MS);
+    if (timer && timer.unref) timer.unref();            // jangan menahan proses node (test)
+    img.onload = () => { if (settledOne) return; settledOne = true; clearTimeout(timer); oneAsset(n, true, false); };
+    img.onerror = () => { if (settledOne) return; settledOne = true; clearTimeout(timer); SPR[n] = null; oneAsset(n, false, false); };
     img.src = 'assets/' + n + '.png';
     SPR[n] = img;
   }
+  /** Watchdog pamungkas: tidak peduli apa yang terjadi, splash harus selesai. */
+  setTimeout(() => settleBoot('watchdog'), BOOT_WATCHDOG_MS);
+  /** Bongkar service worker + kosongkan cache lalu muat ulang (penawar "cache basi"). */
+  function hardReload() {
+    try {
+      if (typeof navigator !== 'undefined' && navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
+        navigator.serviceWorker.getRegistrations().then(rs => { for (const r of (rs || [])) r.unregister(); }).catch(() => { });
+      }
+      if (typeof caches !== 'undefined' && caches.keys) caches.keys().then(ks => { for (const k of (ks || [])) caches.delete(k); }).catch(() => { });
+    } catch (e) { /* browser tanpa Cache API */ }
+    try { if (typeof sessionStorage !== 'undefined') sessionStorage.setItem('hs_bootfix', '1'); } catch (e) { }
+    setTimeout(() => { try { location.reload(); } catch (e) { } }, 150);
+  }
+  const splashSkipBtn = document.getElementById('splashSkip');
+  if (splashSkipBtn) splashSkipBtn.onclick = () => { settleBoot('skipped'); };
+  const splashReloadBtn = document.getElementById('splashReload');
+  if (splashReloadBtn) splashReloadBtn.onclick = () => hardReload();
   /** Progres loading di splash (blueprint: Splash Screen = logo + indikator). */
   const SPLASH_TIPS = [
     'Tekan <span class="kbd">1</span> untuk menyatu dengan lantai.',
@@ -897,10 +986,17 @@ if (typeof document !== 'undefined') (function boot() {
   }
   function hideSplash() {
     if (splashDone) return; splashDone = true;
+    BOOT.state = BOOT.state === 'loading' ? 'ready' : BOOT.state;
     const el = $('splash'); if (el) el.className = 'screen out';
-    const sp = $('splashSpinner'); if (sp) sp.className = 'spinner done';
+    const sp = document.getElementById('splashSpinner'); if (sp) sp.className = 'spinner done';
     splashProgress._iv && clearInterval(splashProgress._iv);
-    if (screens && !started) screens.show(queryFlag('solo') === '1' ? 'game' : 'menu');
+    if (started) return;
+    const target = queryFlag('solo') === '1' ? 'game' : 'menu';
+    if (screens) { screens.show(target); return; }
+    // uiKit.js tidak terpasang? buka manual supaya tidak "layar hitam" sesudah splash.
+    const openId = target === 'game' ? 'hud' : 'menu';
+    const box = $(openId); if (box) box.className = (openId === 'hud' ? box.className : 'screen on');
+    const hud = $('hud'); if (hud && target === 'game') hud.className = 'on';
   }
   if (document.addEventListener) {   // tap = skip splash (mobile: jangan bikin orang menunggu)
     const skip = () => hideSplash();
@@ -913,10 +1009,11 @@ if (typeof document !== 'undefined') (function boot() {
   }, 2600);
 
   function tinted(name, rgb) {
-    if (!rgb) return SPR[name];
+    if (!rgb) return imgReady(SPR[name]) ? SPR[name] : null;
     const k = name + '|' + rgb.join(',');
     if (tintCache.has(k)) return tintCache.get(k);
     const src = SPR[name];
+    if (!imgReady(src)) return null;         // sprite gagal dimuat -> pemanggil pakai fallback
     const c = document.createElement('canvas');
     c.width = src.naturalWidth || 192; c.height = src.naturalHeight || 192;
     const g = c.getContext('2d');
@@ -930,20 +1027,31 @@ if (typeof document !== 'undefined') (function boot() {
     return c;
   }
 
-  /* ---------- rata-rata warna tiap tile (sumber "Match Color") ---------- */
+  /* ---------- rata-rata warna tiap tile (sumber "Match Color") ----------
+     Dua kegagalan yang harus ditoleransi: sprite tidak datang (naturalWidth 0) dan
+     getImageData ditolak browser (canvas "tainted" saat membuka index.html langsung
+     dari file://). Untuk keduanya: pakai konstanta rata-rata warna yang sama seperti
+     di Unity (Assets/Scripts/Core/HideSeekConstants.cs). */
+  const TILE_RGB_FALLBACK = [[74, 135, 25], [217, 166, 95], [124, 128, 127], [139, 85, 42]];
   let tileRgb = null;
-  function computeTileColors() {
+  function tileAvg(i, name) {
+    const src = SPR[name];
+    if (!imgReady(src)) return TILE_RGB_FALLBACK[i] || [120, 120, 120];
     const c = document.createElement('canvas'); c.width = c.height = 16;
     const g = c.getContext('2d', { willReadFrequently: true });
-    tileRgb = TILES.map(name => {
+    try {
       g.clearRect(0, 0, 16, 16);
-      g.drawImage(SPR[name], 0, 0, 16, 16);
+      g.drawImage(src, 0, 0, 16, 16);
       const d = g.getImageData(0, 0, 16, 16).data;
       let r = 0, gg = 0, b = 0, n = 0;
-      for (let i = 0; i < d.length; i += 4) { if (d[i + 3] < 8) continue; r += d[i]; gg += d[i + 1]; b += d[i + 2]; n++; }
-      return n ? [Math.round(r / n), Math.round(gg / n), Math.round(b / n)] : [255, 255, 255];
-    });
+      for (let k = 0; k < d.length; k += 4) { if (d[k + 3] < 8) continue; r += d[k]; gg += d[k + 1]; b += d[k + 2]; n++; }
+      return n ? [Math.round(r / n), Math.round(gg / n), Math.round(b / n)] : (TILE_RGB_FALLBACK[i] || [255, 255, 255]);
+    } catch (e) {
+      console.warn('⚠ warna tile tidak bisa dibaca (canvas tainted / diblokir):', e && e.name);
+      return TILE_RGB_FALLBACK[i] || [120, 120, 120];
+    }
   }
+  function computeTileColors() { tileRgb = TILES.map((name, i) => tileAvg(i, name)); }
 
   const $ = id => document.getElementById(id);
   const cv = $('game'), ctx = cv.getContext('2d');
@@ -993,7 +1101,7 @@ if (typeof document !== 'undefined') (function boot() {
   function setTxt(id, v) { const el = $(id); if (el) el.textContent = v; }
 
   /* layar: splash -> menu -> lobby -> (game) -> result, + modal pause/settings/howto */
-  const SCREEN_NAMES = ['splash', 'menu', 'lobby', 'result', 'pausePanel', 'settingsPanel', 'howtoPanel'];
+  const SCREEN_NAMES = ['splash', 'menu', 'lobby', 'result', 'pausePanel', 'settingsPanel', 'howtoPanel', 'accountPanel'];
   const screens = UI ? new UI.Screens(SCREEN_NAMES, { getElementById: id => $(id), onChange: onScreenChange }) : null;
   let paused = false;
   const fx = UI ? new UI.Fx($('fx'), { project: (wx, wy) => ({ x: W2SX(wx) / (DPR || 1), y: W2SY(wy) / (DPR || 1) }) }) : null;
@@ -1123,7 +1231,7 @@ if (typeof document !== 'undefined') (function boot() {
       if (AU) {
         if (next === 'game' && !paused) AU.music('game');
         else if (next === 'menu' || next === 'lobby' || next === 'result') AU.music('menu');
-        else if (next === 'settingsPanel' || next === 'howtoPanel' || next === 'pausePanel') { /* musik jalan terus */ }
+        else if (next === 'settingsPanel' || next === 'howtoPanel' || next === 'pausePanel' || next === 'accountPanel') { /* musik jalan terus */ }
         else AU.stopMusic && AU.stopMusic();
       }
       setCls('hud', next === 'game' ? 'on' : '');
@@ -1500,7 +1608,7 @@ if (typeof document !== 'undefined') (function boot() {
     resume() { metaPaused = false; $('pauseTag').className = ''; try { AU && AU.duck(false); } catch (e) { } },
     saveGame() { profile.save(); },
     updateUI() { updateUI(); },
-    ads: null, referral: null,          // diisi setelah keduanya dibuat (debug + test)
+    ads: null, referral: null, account: null,   // diisi setelah ketiganya dibuat (debug + test)
     /* lapisan UI v2 — juga dipakai tools/web_dom_smoke.js (grup [5]) */
     ui: {
       get screens() { return screens; }, get fx() { return fx; }, get UI() { return UI; }, get audio() { return AU; },
@@ -1547,9 +1655,14 @@ if (typeof document !== 'undefined') (function boot() {
     if (adBusy) return false;
     adBusy = true;
     let settled = false;
+    // nonce = identitas SATU tayangan; server menolaknya bila dikirim dua kali (anti-refresh).
+    const adNonce = 'ad' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
     const finish = (okFlag) => {
       if (settled) return; settled = true; adBusy = false;
-      if (okFlag === true) { profile.noteAdReward(); sfx('reward'); haptic('win'); if (onReward) onReward(); }
+      if (okFlag === true) {
+        profile.noteAdReward(); sfx('reward'); haptic('win'); if (onReward) onReward();
+        if (account && account.loggedIn) acctReportAd(placement, adNonce);   // diverifikasi + dibayar server
+      }
       updateUI();
     };
     if (ads) {
@@ -1587,6 +1700,325 @@ if (typeof document !== 'undefined') (function boot() {
   }
   gameAPI.ads = ads; gameAPI.referral = referral;
   window.hideSeekReferral = referral;            // konsol: hideSeekReferral.getStats()
+
+  /* ============================================================================
+   * AKUN (JWT) · ID GAME · TEMAN · REFERRAL SERVER
+   * ----------------------------------------------------------------------------
+   * Klien: web/apiKit.js. Server: server/api.js (ikut ter-mount di net-server.js).
+   * Aturan yang dipegang di sini:
+   *   • tanpa server / offline -> account.online false; UI tetap bisa dipakai,
+   *     semua progres tetap di localStorage persis seperti versi v2.2;
+   *   • selama LOGIN, saldo koin/nyawa mengikuti server (referral & reward iklan
+   *     dibayar di server sehingga tidak bisa digandakan dengan refresh);
+   *   • ID game = 7 digit numerik, dipakai untuk saling menambah teman;
+   *   • teman yang punya room aktif bisa langsung diikuti (tombol "Gabung").
+   * ========================================================================== */
+  const account = (typeof window.createApiClient === 'function')
+    ? window.createApiClient({ notify: m => toast(m, 4200), onChange: () => renderAccount() })
+    : (window.BungAPI && window.BungAPI.ApiClient)
+      ? new window.BungAPI.ApiClient({ notify: m => toast(m, 4200), onChange: () => renderAccount() })
+      : null;
+  const APICFG = globalCfg('api') || {};
+  if (account && APICFG.baseUrl !== undefined) account.cfg.baseUrl = APICFG.baseUrl || '';
+  if (account && APICFG.timeoutMs) account.cfg.timeoutMs = APICFG.timeoutMs | 0;
+  const statics = (window.BungAPI && window.BungAPI.ApiClient) || (account && account.constructor) || null;
+  const fmtId = id => (statics && statics.fmtGameId) ? statics.fmtGameId(id) : String(id || '—');
+  const digits = id => String(id || '').replace(/\D/g, '');
+  let acctBusy = false;
+  window.hideSeekAccount = account;                 // konsol: hideSeekAccount.user / .loggedIn
+
+  /* --------------------------------- tampilan -------------------------------- */
+  function setAcctMsg(html, cls) { const el = $('acctMsg'); if (el) { el.innerHTML = html; el.className = 'note' + (cls ? ' ' + cls : ''); } }
+  function acctStatus(text) {
+    setTxt('acctStatus', text);
+    const u = account && account.user;
+    setTxt('lobbyIdTag', u ? ('ID game: ' + fmtId(u.gameId)) : 'ID: belum login');
+  }
+  /** Isi kartu profil + buka/tutup form login sesuai keadaan sesi. */
+  function renderAccount() {
+    const u = account && account.user;
+    const form = $('acctForm'), card = $('acctCard');
+    if (form) form.className = u ? 'hidden' : '';
+    if (card) card.className = u ? '' : 'hidden';
+    if (u) {
+      if (referral && referral.setServerCode && u.refCode) referral.setServerCode(u.refCode);   // link undang = kode server
+      setTxt('pfId', fmtId(u.gameId));
+      setTxt('pfName', u.name + (u.login ? ' (@' + u.login + ')' : ''));
+      setTxt('pfCoins', String(u.coins | 0));
+      setTxt('pfLevel', 'Lv ' + (u.level || 1));
+      setTxt('pfBest', String(u.best | 0));
+      setTxt('pfFriends', String(u.friends | 0));
+      acctStatus('masuk sebagai ' + u.name + ' · ' + (u.invited | 0) + ' teman diundang');
+      const rf = $('regRef'); if (rf && !rf.value) rf.value = (referral && referral.getReferrerCode) ? referral.getReferrerCode() : '';
+    } else {
+      acctStatus(account && !account.online ? 'server akun tidak aktif — mode lokal' : 'belum masuk');
+    }
+    updateUI();                                   // koin/level di menu+HUD ikut disinkronkan
+  }
+  /** Ambil saldo dari server (server = sumber kebenaran selama login). */
+  function adoptServer(u) {
+    if (!u) return;
+    profile.coins = Math.max(0, u.coins | 0);
+    profile.lives = clamp(u.lives | 0, 0, 9);
+    profile.bonusHp = clamp(u.bonusHp | 0, 0, profile.cfg.maxHpCap);
+    profile.xp = Math.max(profile.xp | 0, u.xp | 0);
+    profile.best = Math.max(profile.best | 0, u.best | 0);
+    profile.rounds = Math.max(profile.rounds | 0, u.rounds | 0);
+    profile.save();
+    if (ROUND) { const me = ROUND.me(); if (me) me.maxHp = profile.maxHp; }
+    updateUI();
+  }
+  /** Ringkasan profil lokal utk dilaporkan ke server (max-merge, tidak pernah turun). */
+  function localSnapshot() {
+    let nm = '';
+    try { nm = (typeof localStorage !== 'undefined' && localStorage.getItem('hs_name')) || ''; } catch (e) { }
+    if (!nm) { const ni = $('nameInput'); nm = ni ? ni.value : ''; }
+    const o = { coins: profile.coins, lives: profile.lives, bonusHp: profile.bonusHp, xp: profile.xp, best: profile.best, rounds: profile.rounds, name: nm };
+    if (!account.loggedIn && referral && referral.getReferrerCode) o.ref = referral.getReferrerCode();
+    return o;
+  }
+  /** Kirim progres ke server + adopsi hasilnya (dipanggil setelah ronde & setelah iklan). */
+  async function acctSyncNow(quiet) {
+    if (!account || !account.loggedIn) return null;
+    const r = await account.sync(localSnapshot());
+    if (r.ok) { adoptServer(r.user); renderAccount(); if (!quiet) toast('↺ progres terkirim ke server', 2200); }
+    else if (!quiet && !r.offline) toast('↺ gagal sinkron: ' + (r.error || '?'), 3600);
+    return r;
+  }
+  function acctAfterRound() { acctSyncNow(true).catch(() => { }); }
+  /** Laporkan iklan yang selesai => server memvalidasi cooldown + membayar grant. */
+  function acctReportAd(kind, nonce) {
+    if (!account || !account.loggedIn) return;
+    account.adReward(kind, nonce).then(r => {
+      if (r.ok) { adoptServer(r.user); }
+      else if (r.offline) { /* tetap pakai reward lokal */ }
+      else if (r.secondsLeft) toast('📺 cooldown server: ' + r.secondsLeft + 's', 3000);
+      else if (r.error) toast('📺 ' + r.error, 4000);
+    }).catch(() => { });
+  }
+  function acctAnnounceRoom(code) {
+    if (!account || !account.loggedIn) return;
+    account.announceRoom(code || '').catch(() => { });
+  }
+
+  /* --------------------------------- handlers -------------------------------- */
+  function acctTab(which) {
+    const lb = $('loginBox'), rb = $('regBox'), bl = $('tabLogin'), br = $('tabReg');
+    if (lb) lb.className = 'formbox' + (which === 'login' ? '' : ' hidden');
+    if (rb) rb.className = 'formbox' + (which === 'reg' ? '' : ' hidden');
+    if (bl) bl.className = 'btn sm alt' + (which === 'login' ? ' on' : '');
+    if (br) br.className = 'btn sm ghost' + (which === 'reg' ? ' on' : '');
+  }
+  function openAccount() {
+    if (screens) screens.show('accountPanel'); else { const el = $('accountPanel'); if (el) el.className = 'screen on'; }
+    acctTab('login');
+    renderAccount();
+    if (account && account.loggedIn) account.me().then(r => { if (r.ok) adoptServer(r.user); });   // tarik saldo terbaru
+    acctRefreshFriends();
+    acctRefreshBoard();
+    if (account && !account.checked) account.health().then(h => { if (!h.ok) acctStatus('server akun tidak aktif — mode lokal (jalankan: node web/net-server.js)'); });
+  }
+  function closeAccount() { if (screens) screens.back(); else { const el = $('accountPanel'); if (el) el.className = 'screen'; } }
+  function val(id, dflt) { const el = $(id); return el && el.value !== undefined ? el.value : (dflt || ''); }
+  /** Salin teks (clipboard → fallback textarea → tampilkan manual). */
+  async function copyText(text, label) {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) { await navigator.clipboard.writeText(text); toast(label + ' disalin ✓', 2200); return true; }
+    } catch (e) { }
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.left = '-9999px';
+      document.body.appendChild(ta); ta.select && ta.select();
+      document.execCommand && document.execCommand('copy');
+      ta.remove();
+      toast(label + ' disalin ✓', 2200); return true;
+    } catch (e) { toast('salin manual: ' + text, 8000); return false; }
+  }
+  /* ---- teman: daftar + inbox (dibangun dengan createElement, bukan innerHTML) ---- */
+  function mk(cls, text, tag) {
+    const e = document.createElement(tag || 'div');
+    if (cls) e.className = cls;
+    if (text !== undefined && text !== null) e.textContent = text;
+    return e;
+  }
+  function friendRow(f, opt) {
+    const row = mk('frow' + (f.online ? '' : ' off'));
+    row.appendChild(mk('av', '', 'span'));
+    row.appendChild(mk('nm', f.name, 'b'));
+    row.appendChild(mk('id', fmtId(f.gameId) + ' · Lv ' + (f.level || 1), 'span'));
+    const tag = mk('tag', null, 'div');
+    if (f.room) {
+      const jb = mk('btn sm gold', '🎮 Gabung ' + f.room, 'button');
+      jb.onclick = () => {
+        const ci = $('codeInput'); if (ci) ci.value = f.room;
+        closeAccount();
+        if (screens) screens.show('lobby');
+        joinRoom().catch(e => toast('gagal gabung: ' + e.message));
+      };
+      tag.appendChild(jb);
+    }
+    if (opt && opt.accept) {
+      const y = mk('btn sm', '✓ Terima', 'button');
+      y.onclick = () => { account.acceptFriend(opt.reqId, true).then(r => { toast(r.ok ? '🤝 berteman dengan ' + f.name : '⚠ ' + (r.error || 'gagal')); acctRefreshFriends(); renderAccount(); }); };
+      tag.appendChild(y);
+      const n = mk('btn sm ghost', '✕ Tolak', 'button');
+      n.onclick = () => { account.acceptFriend(opt.reqId, false).then(() => acctRefreshFriends()); tag.appendChild(mk('', 'ditolak…', 'span')); };
+      tag.appendChild(n);
+    } else if (!(opt && opt.outgoing)) {
+      const rm = mk('btn sm ghost', 'hapus', 'button');
+      rm.onclick = () => { account.removeFriend(f.gameId).then(() => { toast('teman dihapus'); acctRefreshFriends(); renderAccount(); }); };
+      tag.appendChild(rm);
+      tag.appendChild(mk('', (statics && statics.agoLabel && f.since !== undefined) ? statics.agoLabel(f.since) : '', 'span'));
+    } else {
+      tag.appendChild(mk('', 'menunggu…', 'span'));
+    }
+    row.appendChild(tag);
+    return row;
+  }
+  function renderFriends(j) {
+    const box = $('friendList'), inbox = $('friendInbox');
+    if (box) {
+      box.innerHTML = '';
+      const list = (j && j.friends) || [];
+      if (!list.length) box.appendChild(mk('note', 'Belum ada teman. Bagikan ID kamu (7 digit) di atas, atau kode undanganmu.'));
+      for (const f of list) box.appendChild(friendRow(f, null));
+    }
+    if (inbox) {
+      inbox.innerHTML = '';
+      const inc = (j && j.incoming) || [];
+      if (inc.length) {
+        const head = mk('sect', 'Ajakan masuk (' + inc.length + ')', 'div');
+        head.style.textTransform = 'uppercase';
+        inbox.appendChild(head);
+        for (const r of inc) inbox.appendChild(friendRow(r.from, { accept: true, reqId: r.reqId }));
+      }
+      for (const r of ((j && j.outgoing) || [])) inbox.appendChild(friendRow(r.to, { outgoing: true }));
+    }
+    setTxt('pfFriends', String(((j && j.friends) || []).length));
+  }
+  async function acctRefreshFriends() {
+    if (!account || !account.loggedIn) { renderFriends(null); return; }
+    const r = await account.friends();
+    if (r.ok) renderFriends(r);
+    else if (r.status === 401) renderAccount();
+  }
+  async function acctRefreshBoard() {
+    if (!account) return;
+    const r = await account.leaderboard(8);
+    const tb = $('globalBoard');
+    if (!tb) return;
+    if (!r.ok || !r.rows) { tb.innerHTML = ''; tb.appendChild(mk('', 'papan skor global butuh server akun (node web/net-server.js)', 'tr')); return; }
+    tb.innerHTML = '';
+    for (const x of r.rows) {
+      const tr = document.createElement('tr');
+      tr.appendChild(mk('', String(x.rank), 'td'));
+      tr.appendChild(mk('', x.name, 'td'));
+      tr.appendChild(mk('', fmtId(x.gameId), 'td'));
+      tr.appendChild(mk('', 'Lv ' + x.level, 'td'));
+      tr.appendChild(mk('', String(x.best), 'td'));
+      tb.appendChild(tr);
+    }
+  }
+
+  /* ------------------------------ pasang tombol ------------------------------ */
+  onClick('accountBtn', openAccount);
+  onClick('lobbyAccountBtn', openAccount);
+  onClick('acctClose', closeAccount);
+  onClick('tabLogin', () => acctTab('login'));
+  onClick('tabReg', () => acctTab('reg'));
+  onClick('copyIdBtn', () => { const u = account && account.user; if (u) copyText(u.gameId, 'ID game'); });
+  onClick('refBtn', () => { if (referral) referral.showInviteModal(); });
+  onClick('syncBtn', () => acctSyncNow(false).catch(() => toast('sinkronisasi gagal', 2500)));
+  onClick('logoutBtn', () => {
+    if (account) account.logout();
+    renderAccount(); renderFriends(null);
+    toast('keluar — progres lokal tetap di perangkat ini', 3200);
+  });
+  onClick('doLogin', async () => {
+    if (!account) return toast('apiKit.js belum dimuat', 3000);
+    if (acctBusy) return;
+    acctBusy = true;
+    setAcctMsg('masuk…');
+    const r = await account.login({ user: val('loginUser'), pass: val('loginPass') }, localSnapshot());
+    acctBusy = false;
+    if (!r.ok) { setAcctMsg('⚠ ' + (r.offline ? 'server akun tidak aktif — jalankan <b>node web/net-server.js</b>' : (r.error || 'gagal')), 'warn'); return; }
+    adoptServer(r.user);
+    const mine = val('loginUser');
+    try { localStorage.setItem('hs_name', r.user.name || mine); } catch (e) { }
+    const ni = $('nameInput'); if (ni) ni.value = r.user.name || mine;
+    setAcctMsg('✓ halo <b>' + r.user.name + '</b> — ID game <b>' + fmtId(r.user.gameId) + '</b>');
+    renderAccount();
+    acctRefreshFriends(); acctRefreshBoard();
+    // referral yang tertahan (pengunjung ?ref= lalu login sekarang) dibayar di sini
+    const pend = referral && referral.getReferrerCode ? referral.getReferrerCode() : '';
+    if (pend) account.claimReferral(pend).then(x => {
+      if (x.ok) { adoptServer(x.user); toast('🎁 referral dibayar server: +' + (x.user.grantedCoins | 0) + ' koin', 4800); }
+    });
+    toast('👤 masuk sebagai ' + r.user.name, 2600);
+  });
+  onClick('doReg', async () => {
+    if (!account) return toast('apiKit.js belum dimuat', 3000);
+    if (acctBusy) return;
+    acctBusy = true;
+    setAcctMsg('mendaftar…');
+    const r = await account.signup({
+      name: val('regName') || val('regUser'), user: val('regUser'), pass: val('regPass'),
+      ref: (val('regRef') || (referral && referral.getReferrerCode ? referral.getReferrerCode() : '') || '').trim(),
+    });
+    acctBusy = false;
+    if (!r.ok) { setAcctMsg('⚠ ' + (r.error || (r.offline ? 'server akun tidak aktif — jalankan node web/net-server.js' : 'gagal')), 'warn'); return; }
+    if (r.user && r.user.name) { try { localStorage.setItem('hs_name', r.user.name); } catch (e) { } const ni = $('nameInput'); if (ni) ni.value = r.user.name; }
+    adoptServer(r.user);
+    // kode referral lokal diganti milik server supaya link lama tetap dipakai bersama
+    if (referral && referral.setServerCode && r.user.refCode) referral.setServerCode(r.user.refCode);
+    setAcctMsg('✓ akun jadi · ID game <b>' + fmtId(r.user.gameId) + '</b> · kode undangan <b>' + r.user.refCode + '</b>');
+    if (r.referral && r.referral.ok) toast('🎁 kode undangan diterima: +' + r.referral.coinsForInvitee + ' koin & +' + r.referral.hpForInvitee + ' nyawa', 5200);
+    else if (r.referral && r.referral.error) toast('🎁 ' + r.referral.error, 4200);
+    renderAccount();
+    acctRefreshFriends(); acctRefreshBoard();
+    toast('👤 selamat datang, ' + r.user.name + '! ID kamu ' + fmtId(r.user.gameId), 5200);
+  });
+  onClick('addFriendBtn', async () => {
+    if (!account || !account.loggedIn) { setAcctMsg('masuk dulu supaya bisa menambah teman', 'warn'); return; }
+    const id = digits(val('friendId'));
+    if (id.length !== 7) { setAcctMsg('⚠ ID game = <b>7 digit</b> angka, contoh <b>104 8293</b> (teman kamu membukanya di menu 👤 AKUN)', 'warn'); return; }
+    setAcctMsg('mencari ' + fmtId(id) + '…');
+    const f = await account.findPlayer(id);
+    if (!f.ok) { setAcctMsg('⚠ ' + (f.error || 'tidak ditemukan'), 'warn'); return; }
+    if (f.state === 'self') { setAcctMsg('itu ID kamu sendiri 😄', 'warn'); return; }
+    if (f.state === 'friends') { setAcctMsg('kalian sudah berteman ✓'); acctRefreshFriends(); return; }
+    const r = await account.addFriend(id);
+    if (!r.ok) { setAcctMsg('⚠ ' + (r.error || 'gagal mengirim ajakan'), 'warn'); return; }
+    setAcctMsg(r.state === 'friends'
+      ? '🤝 <b>' + ((f.player && f.player.name) || '?') + '</b> sekarang teman kamu!'
+      : '📨 ajakan terkirim ke <b>' + ((f.player && f.player.name) || '?') + '</b> — dia menerimanya dari menu yang sama.');
+    acctRefreshFriends(); renderAccount();
+  });
+  $('friendId') && ($('friendId').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); const b = $('addFriendBtn'); b && b.click && b.click(); } }));
+
+  /* ---------------------------- hidupkan + kaitkan --------------------------- */
+  if (account) {
+    if (referral && referral.setServer) {
+      referral.setServer({
+        getCode: () => (account.user && account.user.refCode) || '',
+        stats: () => (account.user ? { invited: account.user.invited | 0, coinsPerFriend: 100, paidByServer: true } : null),
+        claim: code => account.claimReferral(code),
+      });
+    }
+    if (referral && referral.getReferrerCode) account.pendingRef = referral.getReferrerCode() || '';
+    account.health().then(async h => {
+      if (!h.ok) { renderAccount(); return; }
+      const r = await account.restore();
+      if (r.ok) {
+        adoptServer(r.user);
+        if (r.referral && r.referral.ok) toast('🎁 referral dibayar server: +' + r.referral.coinsForInviter + ' koin untuk ' + r.referral.by, 5200);
+      } else if (account.token) toast('sesi berakhir — masuk lagi lewat menu 👤 AKUN', 3600);
+      renderAccount();
+    }).catch(() => { renderAccount(); });
+  } else {
+    acctStatus('apiKit.js tidak dimuat — mode lokal');
+  }
+  gameAPI.account = { api: account, render: renderAccount, sync: acctSyncNow, adopt: adoptServer, open: openAccount };
 
   /* ----- HUD meta: koin, nyawa cadangan, tombol iklan & undang teman ----- */
   function updateUI() {
@@ -1784,6 +2216,7 @@ if (typeof document !== 'undefined') (function boot() {
           const xp = profile.awardProgress(me.score | 0, win);            // XP utk layar Game Over
           const local = localScores.add({ name: me.name, score: me.score | 0, role: me.isHider ? 'HIDER' : 'SEEKER', win });
           prog = { gained, xp: xp.gained, leveledTo: xp.leveledTo, level: xp.level, progress: xp.progress, local };
+          if (account && account.loggedIn) acctAfterRound();              // kirim skor ke server (papan skor global)
           if (gained > 0) {
             toast(`🪙 +${gained} koin (skor ${me.score})`, 3200); sfx('coin');
             if (fx) fx.damage(me.x, me.y, '+' + gained + ' 🪙', 'coin');
@@ -1958,6 +2391,7 @@ if (typeof document !== 'undefined') (function boot() {
     $('lobby').className = 'panel hidden';
     fillWithBots(0);
     ROUND.myId = j.you;
+    if (account && account.loggedIn) acctAnnounceRoom(j.room);           // teman bisa melihat + ikut
     poll();
     setInterval(async () => {
       if (!net || netMode !== 'host' || ROUND.phase === 'LOBBY') return;
@@ -1974,6 +2408,7 @@ if (typeof document !== 'undefined') (function boot() {
     netMode = 'client'; $('netMode').textContent = 'ONLINE (client) — room ' + code;
     $('lobby').className = 'panel hidden';
     ROUND.myId = j.you;
+    if (account && account.loggedIn) acctAnnounceRoom(code);              // teman bisa melihat + ikut
     toast('menunggu host memulai ronde…');
     poll();
     setInterval(async () => {
@@ -2022,7 +2457,10 @@ if (typeof document !== 'undefined') (function boot() {
   $('hostBtn').onclick = () => hostRoom().catch(e => toast('gagal buat room: ' + e.message + ' (jalankan: node web/net-server.js)'));
   $('joinBtn').onclick = () => joinRoom().catch(e => toast('gagal gabung: ' + e.message));
   $('startBtn').onclick = () => { if (netMode === 'host') { syncRoster(); ROUND.start(true); } };
-  $('leaveBtn').onclick = () => { net = null; netMode = 'solo'; $('roomRow').style.display = 'none'; $('lobby').className = 'panel'; showScreen('lobby'); };
+  $('leaveBtn').onclick = () => {
+    net = null; netMode = 'solo'; $('roomRow').style.display = 'none'; $('lobby').className = 'panel'; showScreen('lobby');
+    if (account && account.loggedIn) acctAnnounceRoom('');                 // jangan tinggalkan "room kosong" di daftar teman
+  };
   if (location.hostname) resize();
   // auto-start saat ?solo=1 (dipakai juga oleh pengecekan visual)
   if (new URLSearchParams(location.search).get('solo') === '1') $('soloBtn').click();

@@ -101,6 +101,15 @@
     <div id="splashPct">MEMUAT 0%</div>
     <div class="spinner" id="splashSpinner"></div>
     <p class="note" id="splashTip">Tips: tekan <span class="kbd">1</span> untuk menyatu dengan lantai.</p>
+    <!-- keselamatan boot: kalau ada file yang tidak selesai di-download, pengguna
+         tidak boleh terjebak di layar loading (watchdog v2.3 di lapisan browser) -->
+    <div id="splashHelp" class="hidden">
+      <p class="note" id="splashErr">—</p>
+      <div class="row">
+        <button class="btn" id="splashSkip">LANJUTKAN (lewati file yang gagal)</button>
+        <button class="btn ghost" id="splashReload">↻ MUAT ULANG BERSIH</button>
+      </div>
+    </div>
   </div>
 
   <!-- ============================ MAIN MENU ============================ -->
@@ -113,7 +122,8 @@
       <div class="row" style="flex-direction:column;align-items:stretch;width:100%">
         <button class="btn big" id="playBtn">▶ MAIN (bots)</button>
         <button class="btn alt" id="multiBtn">🌐 MULTIPLAYER / ROOM</button>
-        <button class="btn purple" id="howtoBtn">📖 CARA MAIN</button>
+        <button class="btn purple" id="accountBtn">👤 AKUN · TEMAN · ID</button>
+        <button class="btn ghost" id="howtoBtn">📖 CARA MAIN</button>
         <button class="btn ghost" id="settingsBtn">⚙️ SETELAN</button>
       </div>
       <div class="row">
@@ -158,7 +168,83 @@
         <span class="kbd">Q</span>/<span class="kbd">E</span> skill seeker · <span class="kbd">Space</span> mulai ·
         <span class="kbd">M</span> suara · <span class="kbd">Esc</span> pause
       </p>
-      <div class="row"><button class="btn ghost" id="lobbyBackBtn">← MENU</button></div>
+      <div class="row">
+        <button class="btn ghost" id="lobbyBackBtn">← MENU</button>
+        <span class="pill dim" id="lobbyIdTag" title="ID game kamu — bagikan supaya bisa ditambahkan sebagai teman">ID: belum login</span>
+        <button class="btn purple" id="lobbyAccountBtn">👤 AKUN / TEMAN</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================ AKUN · ID GAME · TEMAN ============================
+       Signup/login JWT ke server/ (lihat server/api.js). Tanpa server, panel ini
+       otomatis kembali ke mode lokal: semua tombol tetap ada tapi status tertulis "offline". -->
+  <div id="accountPanel" class="screen">
+    <div class="sheet" style="width:min(560px,94vw)">
+      <h1 class="logo" style="font-size:clamp(18px,5vw,26px)">AKUN &amp; TEMAN<small>ID game · referral · papan skor global</small></h1>
+      <div class="row" style="justify-content:space-between">
+        <span class="pill dim" id="acctStatus">memeriksa server…</span>
+        <button class="iconbtn" id="acctClose" aria-label="Tutup" style="width:32px;height:32px;min-width:32px">
+          <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      </div>
+
+      <!-- ---------- belum login: form masuk / daftar ---------- -->
+      <div id="acctForm">
+        <div class="row" style="gap:6px;margin-bottom:8px">
+          <button class="btn alt sm on" id="tabLogin">MASUK</button>
+          <button class="btn ghost sm" id="tabReg">DAFTAR</button>
+        </div>
+        <div class="row" style="flex-direction:column;align-items:stretch;gap:8px">
+          <div id="loginBox" class="formbox">
+            <input id="loginUser" placeholder="nama akun (a-z 0-9 _)" maxlength="16" autocomplete="username">
+            <input id="loginPass" type="password" placeholder="password" maxlength="64" autocomplete="current-password">
+            <button class="btn big" id="doLogin">▶ MASUK</button>
+          </div>
+          <div id="regBox" class="formbox hidden">
+            <input id="regName" placeholder="nama tampilan (max 16)" maxlength="16" autocomplete="nickname">
+            <input id="regUser" placeholder="nama akun — dipakai untuk login" maxlength="16" autocomplete="username">
+            <input id="regPass" type="password" placeholder="password (min 4)" maxlength="64" autocomplete="new-password">
+            <input id="regRef" placeholder="kode undangan teman (opsional)" maxlength="8" autocomplete="off" style="text-transform:uppercase">
+            <button class="btn gold" id="doReg">✚ DAFTAR &amp; PAKAI KODE</button>
+          </div>
+        </div>
+        <p class="note" id="acctMsg">Progres lokal (koin/level/rekor) ikut dikirim saat login, tidak pernah menurunkan nilai di server.</p>
+      </div>
+
+      <!-- ---------- sudah login: ID game + teman + referral ---------- -->
+      <div id="acctCard" class="hidden">
+        <div class="idcard">
+          <span class="lbl">ID GAME KAMU</span>
+          <b id="pfId">—</b>
+          <button class="btn ghost sm" id="copyIdBtn">📋 salin</button>
+        </div>
+        <div class="row" style="justify-content:center;gap:6px;flex-wrap:wrap">
+          <span class="pill dim" id="pfName">—</span>
+          <span class="pill gold"><b id="pfCoins">0</b> koin</span>
+          <span class="pill xp"><b id="pfLevel">Lv 1</b></span>
+          <span class="pill dim">rekor <b id="pfBest">0</b></span>
+          <span class="pill dim">teman <b id="pfFriends">0</b></span>
+        </div>
+        <div class="row" style="gap:8px;margin-top:6px;flex-wrap:wrap">
+          <button class="btn sm alt" id="syncBtn">↺ sinkronkan progres</button>
+          <button class="btn sm ghost" id="refBtn">🎁 undang teman</button>
+          <button class="btn sm ghost" id="logoutBtn">keluar</button>
+        </div>
+
+        <h3 class="sect">Tambah teman lewat ID</h3>
+        <div class="row" style="gap:6px">
+          <input id="friendId" placeholder="ID game teman (7 digit)" inputmode="numeric" maxlength="12" style="width:min(180px,50vw)">
+          <button class="btn alt" id="addFriendBtn">+ TAMBAH</button>
+        </div>
+        <p class="note" id="friendMsg">Ketik ID teman → kirim ajakan. Kalau dia juga mengajakmu, kalian langsung berteman.</p>
+        <div id="friendInbox"></div>
+        <h3 class="sect">Daftar teman</h3>
+        <div id="friendList" class="friends"><span class="note">belum ada</span></div>
+      </div>
+
+      <h3 class="sect">Papan skor global</h3>
+      <table><thead><tr><th>#</th><th>Pemain</th><th>ID</th><th>Lv</th><th>Rekor</th></tr></thead>
+        <tbody id="globalBoard"><tr><td colspan="5" class="note">—</td></tr></tbody></table>
     </div>
   </div>
 
@@ -264,6 +350,8 @@
 <!-- sistem iklan + referral -->
 <script src="adsManager.js"></script>
 <script src="referralSystem.js"></script>
+<!-- klien backend akun: signup/login JWT + referral + teman (opsional: server boleh tidak jalan) -->
+<script src="apiKit.js"></script>
 <script src="game.js"></script>
 <script>
 /* PWA: service worker (offline + Add to Home Screen). Bisa dimatikan: ?nosw=1 */
