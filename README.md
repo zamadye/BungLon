@@ -21,6 +21,8 @@ Assets/
 │   │               RoomListEntryUI.cs    (baris room)
 │   │               MobileJoystick.cs     (joystick virtual)
 │   │               LeaderboardRow.cs     (baris leaderboard)
+│   │   └── Hud/    HudV2Theme.cs · HudSafeArea.cs · HudV2SkillButton.cs · HudV2DamageText.cs ·
+│   │               HudV2LocalBoard.cs · HudV2Settings.cs   (HUD v2 - dibuat lewat Setup → 6)
 │   ├── Utils/      CamouflageHelper.cs   (8. rata-rata warna di bawah raycast 2D)
 │   │               PlayerVisual.cs       (helper SpriteRenderer / alpha / flip)
 │   │               MinimapRadarView.cs   (minimap + lingkaran radar)
@@ -28,7 +30,7 @@ Assets/
 │   │               PlayerCamera.cs       (kamera ortho, ikut Seeker saat jadi hantu)
 │   ├── Monetization/ AdsManager.cs       (rewarded ad Unity Ads + fallback simulasi)
 │   │               RewardOffers.cs      (3 penawaran reward + kuota per ronde)
-│   └── Editor/     HideSeekSetupTool.cs  (menu setup otomatis — hanya Editor, tidak ikut build)
+│   └── Editor/     HideSeekSetupTool.cs  (menu setup otomatis 1-6 — hanya Editor, tidak ikut build)
 │                 HideSeekArtInstaller.cs (Setup → 5: pasang PNG art AI ke prefab/UI)
 │                 HideSeekTextureImporter.cs (import rule: Read/Write utk tile, PPU 128)
 ├── Prefabs/        PlayerNetworked, Props (Meja/Kursi/Pot), SonicBlastRing
@@ -37,7 +39,8 @@ Assets/
 └── Resources/HideSeek/   fallback prefab agar project langsung bisa di-playtest
 
 web/                BUILD TANPA UNITY (bagian 10): index.html + game.js + net-server.js + assets/
-tools/              web_selftest.js (paritas CFG↔C# + rules), web_dom_smoke.js (118), web_ui_test.js (227), web_ads_referral_test.js (130), web_map_preview.py
+tools/              web_selftest.js (243: paritas CFG↔C# + rules), web_dom_smoke.js (143), web_ui_test.js (258),
+                    web_ads_referral_test.js (130), web_map_preview.py
 Tools/hideseek_art_postprocess.py   (keying/segmentasi/resize PNG art, hanya pillow)
 ```
 
@@ -66,11 +69,12 @@ Tools/hideseek_art_postprocess.py   (keying/segmentasi/resize PNG art, hanya pil
    `gameSceneName="Game"`, `loadGameSceneOnStart` (hanya di Lobby), dan mendaftarkan kedua scene
    ke **Build Settings** otomatis. Setelah ini tinggal isi App ID → Play.
 7b. (opsional) Punya aset AI? Taruh PNG di `Assets/Art/HideSeek/**` lalu
-   **HideSeek → Setup → 5. Pasang Art AI** → sprite karakter/prop/tile/ikon/background (termasuk `Icon_Freeze`)
-5b. (opsional) port HUD blueprint ke Unity: **HideSeek → Setup → 6. Bangun HUD v2** → zona
-       TL/TC/TR/ML/BR + safe-area + 3 tombol skill ber-ring cooldown + panel Settings. Detail di
-       bagian *UI/UX v2.2*.
+   **HideSeek → Setup → 5. Pasang Art AI** → sprite karakter/prop/tile/ikon/background ikut
    terpasang ke prefab + Canvas otomatis. Detail pipeline: `Assets/Art/prompts.md`.
+7c. (opsional, Phase 2 blueprint) **HideSeek → Setup → 6. Bangun HUD v2** → zona TL/TC/TR/ML/BR
+   + safe-area + 3 tombol skill ber-ring cooldown (slot ke-3 = Bekukan, khusus Hider) + panel
+   Settings. Referensi `UIManager` diisi otomatis; ikon per role dipasang oleh langkah 7b.
+   Detail: bagian *UI/UX v2.2*.
 8. Isi App ID (lihat langkah 1 di bawah), lalu **Play** di scene **Lobby**. Tekan `N` = buat room,
    `J` = quick play, `Space` = Start (host). Test sendirian: centang **`offlineMode`** di
    `NetworkManager` (nama field-nya begitu, bukan `testOfflineMode`) — di mode offline minimal
@@ -356,7 +360,9 @@ Host = Authority untuk phase timer & keputusan tangkap, sama seperti `GameManage
 | Aksi | Unity | web demo |
 |---|---|---|
 | gerak | WASD + joystick virtual (`MobileJoystick`) | `A/D/W/S`, `←↑↓→`, atau joystick di layar |
-| skill 1 / 2 | tombol HUD (radial `cooldownFill`) | `1` / `2` atau tombol di kanan-bawah |
+| skill 1 / 2 / 3 | tombol HUD (radial `cooldownFill`); slot 3 = Bekukan, hanya Hider | `1` / `2` / `3` atau tombol di kanan-bawah |
+| kamera | `PlayerCamera` (SmoothDamp + zoom idle/lari/SEEK) | `uiKit.Camera2D`; matikan dengan `?cam=0` |
+| aim Prop | tahan→seret→lepas via `HudV2SkillButton` (popup `GetPropChoices`) | tahan tombol **Prop** lalu seret ke prop tujuan, lepas |
 | menangkap | `Tap` → `PlayerCombat.RequestCatch` | `klik`/`tap` di dekat hider (maks. 3 unit) |
 | Kamuflase | raycast → rata-rata warna `Collider2D` tanah | rata-rata warna piksel tile di bawah kaki (dihitung dari PNG tile) |
 | Prop Swap | `FreezeForProp` + batal saat ada input gerak | identik |
