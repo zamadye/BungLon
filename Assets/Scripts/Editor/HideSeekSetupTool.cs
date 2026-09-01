@@ -469,23 +469,328 @@ namespace HideSeek.EditorTools
         }
 
         /// <summary>Isi array SkillButtonConfig[2] lewat SerializedObject (class [Serializable]).</summary>
-        private static void WireSkillButtons(UIManager ui, Button[] btns, Image[] fills, string[] hiderLabels, string[] seekerLabels)
+        private static void WireSkillButtons(UIManager ui, Button[] btns, Image[] fills, string[] hiderLabels, string[] seekerLabels,
+                                              Text[] cooldownTexts = null)
         {
             var so = new SerializedObject(ui);
             SerializedProperty arr = so.FindProperty("skills");
             if (arr == null) return;
-            arr.arraySize = 2;
-            for (int i = 0; i < 2; i++)
+            int n = btns != null ? btns.Length : 0;                       // 2 (HUD lama) atau 3 (HUD v2)
+            arr.arraySize = n;
+            for (int i = 0; i < n; i++)
             {
                 SerializedProperty e = arr.GetArrayElementAtIndex(i);
                 e.FindPropertyRelative("button").objectReferenceValue = btns[i];
-                e.FindPropertyRelative("cooldownFill").objectReferenceValue = fills[i];
-                e.FindPropertyRelative("cooldownText").objectReferenceValue = null;
-                e.FindPropertyRelative("hiderLabel").stringValue = hiderLabels[i];
-                e.FindPropertyRelative("seekerLabel").stringValue = seekerLabels[i];
+                e.FindPropertyRelative("cooldownFill").objectReferenceValue = fills != null && i < fills.Length ? fills[i] : null;
+                e.FindPropertyRelative("cooldownText").objectReferenceValue =
+                    cooldownTexts != null && i < cooldownTexts.Length ? cooldownTexts[i] : null;
+                e.FindPropertyRelative("hiderLabel").stringValue = hiderLabels != null && i < hiderLabels.Length ? hiderLabels[i] : "Skill";
+                e.FindPropertyRelative("seekerLabel").stringValue = seekerLabels != null && i < seekerLabels.Length ? seekerLabels[i] : "Skill";
             }
             so.ApplyModifiedPropertiesWithoutUndo();
         }
+
+
+        // ======================= HUD v2 (blueprint Phase 2) ====================
+        /// <summary>
+        /// Bangun HUD v2 sesuai blueprint (zona TL/TC/TR/ML/BR, glass panel, ring cooldown,
+        /// safe-area, hearts, hint, papan skor lokal, panel Settings) di Canvas yang SUDAH ada,
+        /// lalu isi referensi-nya ke UIManager. Idempoten: dijalankan ulang = rebuilt.
+        /// </summary>
+        [MenuItem("HideSeek/Setup/6. Bangun HUD v2 (blueprint) + 3 tombol skill")]
+        public static void BuildHudV2()
+        {
+            var ui = UnityEngine.Object.FindObjectOfType<UIManager>();
+            if (ui == null)
+            {
+                Debug.LogError("[HideSeek] HUD v2: tidak ada UIManager di scene. Jalankan Setup > 3 (Build Demo Scene) dulu.");
+                return;
+            }
+            Canvas canvas = ui.GetComponentInParent<Canvas>();
+            if (canvas == null) canvas = UnityEngine.Object.FindObjectOfType<Canvas>();
+            if (canvas == null)
+            {
+                Debug.LogError("[HideSeek] HUD v2: tidak ada Canvas. Jalankan Setup > 3 dulu.");
+                return;
+            }
+
+            // root lama dibuang supaya bisa dijalankan berulang kali
+            var old = canvas.transform.Find("HUD_v2");
+            if (old != null) UnityEngine.Object.DestroyImmediate(old.gameObject, true);
+
+            var rootGo = new GameObject("HUD_v2", typeof(RectTransform));
+            rootGo.transform.SetParent(canvas.transform, false);
+            var root = (RectTransform)rootGo.transform;
+            root.anchorMin = Vector2.zero; root.anchorMax = Vector2.one;
+            root.offsetMin = root.offsetMax = Vector2.zero;
+            rootGo.AddComponent<HudSafeArea>();                 // notch / gesture bar
+            var rg = rootGo.AddComponent<CanvasGroup>();
+            rg.blocksRaycasts = true;
+
+            // ---- TL: kembali + nama pemain ----------------------------------
+            RectTransform tl = Zone(root, "TL", new Vector2(0f, 1f), new Vector2(0f, 1f),
+                                    new Vector2(Pad, -Pad), new Vector2(260f, 96f));
+            Panel(tl, "Panel", HudColor(HudV2Theme.Glass, 0.72f));
+            Button back = RoundButton(tl, "BackBtn", "<", 44, new Vector2(22f, -22f));
+            Text nameTag = MakeText(tl, "NameTag", "Pemain", 18, new Vector2(0f, 0f), new Vector2(170f, 26f));
+            nameTag.rectTransform.anchorMin = new Vector2(0f, 1f);
+            nameTag.rectTransform.anchorMax = new Vector2(0f, 1f);
+            nameTag.rectTransform.pivot = new Vector2(0f, 1f);
+            nameTag.rectTransform.anchoredPosition = new Vector2(52f, -14f);
+            nameTag.alignment = TextAnchor.MiddleLeft;
+            nameTag.color = HudV2Theme.Ink;
+
+            // ---- TC: fase + timer + role + hint + countdown ------------------
+            RectTransform tc = Zone(root, "TC", new Vector2(0.5f, 1f), new Vector2(0.5f, 1f),
+                                    new Vector2(-170f, -Pad), new Vector2(340f, 112f));
+            Panel(tc, "Panel", HudColor(HudV2Theme.Glass, 0.72f));
+            Text phase = MakeText(tc, "Phase", "LOBBY", 15, new Vector2(0.5f, 1f), new Vector2(320f, 22f));
+            phase.rectTransform.anchoredPosition = new Vector2(0f, -12f);
+            phase.color = HudV2Theme.Info;
+            Text timer = MakeText(tc, "Timer", "0:30", 40, new Vector2(0.5f, 1f), new Vector2(320f, 44f));
+            timer.rectTransform.anchoredPosition = new Vector2(0f, -40f);
+            timer.fontStyle = FontStyle.Bold;
+            Text role = MakeText(tc, "Role", "menunggu role...", 14, new Vector2(0.5f, 1f), new Vector2(320f, 20f));
+            role.rectTransform.anchoredPosition = new Vector2(0f, -70f);
+            role.color = HudV2Theme.Hider;
+            Text hint = MakeText(tc, "Hint", "Tekan MULAI di lobby", 12, new Vector2(0.5f, 1f), new Vector2(330f, 34f));
+            hint.rectTransform.anchoredPosition = new Vector2(0f, -92f);
+            hint.color = HudV2Theme.WithAlpha(HudV2Theme.Ink, 0.78f);
+            Text count = MakeText(tc, "Countdown", "", 64, new Vector2(0.5f, 0.5f), new Vector2(200f, 80f));
+            count.alignment = TextAnchor.MiddleCenter;
+
+            // ---- TR: suara + papan skor + minimap ----------------------------
+            RectTransform tr = Zone(root, "TR", new Vector2(1f, 1f), new Vector2(1f, 1f),
+                                    new Vector2(-Pad, -Pad), new Vector2(190f, 150f));
+            Panel(tr, "Panel", HudColor(HudV2Theme.Glass, 0.66f));
+            Button sound = RoundButton(tr, "SoundBtn", "~", 44, new Vector2(-26f, -26f));
+            Button board = RoundButton(tr, "BoardBtn", "#", 44, new Vector2(-78f, -26f));
+            Text boardRows = MakeText(tr, "LocalBoard", "", 13, new Vector2(1f, 1f), new Vector2(180f, 96f));
+            boardRows.rectTransform.anchorMin = new Vector2(1f, 1f);
+            boardRows.rectTransform.pivot = new Vector2(1f, 1f);
+            boardRows.rectTransform.anchoredPosition = new Vector2(-8f, -54f);
+            boardRows.alignment = TextAnchor.UpperRight;
+            boardRows.color = HudV2Theme.Ink;
+            var boardTxt = boardRows.gameObject.AddComponent<HideSeek.UI.HudV2LocalBoard>();
+            boardTxt.target = boardRows;
+
+            // ---- ML: joystick + hearts --------------------------------------
+            RectTransform ml = Zone(root, "ML", new Vector2(0f, 0f), new Vector2(0f, 0f),
+                                    new Vector2(Pad, Pad), new Vector2(190f, 190f));
+            Image joyBase = Panel(ml, "JoyBase", HudColor(HudV2Theme.Glass, 0.5f)).GetComponent<Image>();
+            joyBase.transform.SetParent(ml, false);
+            var joyRt = (RectTransform)joyBase.transform;
+            joyRt.anchorMin = joyRt.anchorMax = new Vector2(0.5f, 0.5f);
+            joyRt.sizeDelta = new Vector2(160f, 160f);
+            joyRt.anchoredPosition = new Vector2(84f, 78f);
+            GameObject handle = new GameObject("JoyHandle", typeof(RectTransform), typeof(Image));
+            handle.transform.SetParent(ml, false);
+            var hRt = (RectTransform)handle.transform;
+            hRt.anchorMin = hRt.anchorMax = new Vector2(0.5f, 0.5f);
+            hRt.sizeDelta = new Vector2(64f, 64f);
+            hRt.anchoredPosition = new Vector2(84f, 78f);
+            handle.GetComponent<Image>().color = HudV2Theme.WithAlpha(HudV2Theme.Info, 0.85f);
+            var joy = ml.gameObject.AddComponent<MobileJoystick>();
+            var joySo = new SerializedObject(joy);
+            joySo.FindProperty("background").objectReferenceValue = joyRt;
+            joySo.FindProperty("handle").objectReferenceValue = hRt;
+            joySo.FindProperty("radius").floatValue = 74f;
+            joySo.FindProperty("floatingOrigin").boolValue = true;
+            joySo.ApplyModifiedPropertiesWithoutUndo();
+
+            Image[] hearts = MakeHearts(ml, new Vector2(0f, 0f));
+            // MakeHearts membuat holder "Hearts" (HorizontalLayoutGroup) -> geser holdernya, bukan anaknya.
+            var heartsBox = hearts.Length > 0 ? hearts[0].transform.parent as RectTransform : null;
+            if (heartsBox != null)
+            {
+                heartsBox.anchorMin = new Vector2(0f, 0f); heartsBox.anchorMax = new Vector2(0f, 0f);
+                heartsBox.pivot = new Vector2(0f, 0.5f);
+                heartsBox.anchoredPosition = new Vector2(8f, 232f);
+            }
+            Text hpText = MakeText(ml, "HpText", "HP 3/3", 13, new Vector2(0f, 0f), new Vector2(150f, 20f));
+            hpText.rectTransform.anchorMin = new Vector2(0f, 0f);
+            hpText.rectTransform.anchoredPosition = new Vector2(8f, 262f);
+            hpText.alignment = TextAnchor.LowerLeft;
+            hpText.color = HudV2Theme.Ink;
+
+            // ---- BR: 3 tombol skill (ring cooldown + ikon + label) ----------
+            RectTransform br = Zone(root, "BR", new Vector2(1f, 0f), new Vector2(1f, 0f),
+                                    new Vector2(-Pad, Pad), new Vector2(230f, 210f));
+            var btns = new Button[3];
+            var fills = new Image[3];
+            var labels = new Text[3];
+            string[] hid = { "Kamuflase", "Prop Swap", "Bekukan" };
+            string[] seek = { "Radar", "Sonic Blast", "" };
+            for (int i = 0; i < 3; i++)
+            {
+                Vector2 pos = i == 0 ? new Vector2(58f, 58f) : i == 1 ? new Vector2(150f, 42f) : new Vector2(118f, 140f);
+                BuildSkillButton(br, i, hid[i], seek[i], pos, out btns[i], out fills[i], out labels[i]);
+            }
+
+            WireSkillButtons(ui, btns, fills, hid, seek, labels);
+
+            // ---- panel Settings (sensitivitas + audio + hapus rekor) --------
+            RectTransform set = Zone(root, "Settings", new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
+                                     Vector2.zero, new Vector2(320f, 250f));
+            Panel(set, "Panel", HudColor(new Color(2f, 3f, 3f, 1f), 0.94f));
+            set.gameObject.SetActive(false);
+            var stTitle = MakeText(set, "Title", "PENGATURAN", 18, new Vector2(0.5f, 1f), new Vector2(300f, 26f));
+            stTitle.rectTransform.anchoredPosition = new Vector2(0f, -16f);
+            var sensLabel = MakeText(set, "SensLabel", "Sensitivitas tuas: 100%", 14, new Vector2(0.5f, 1f), new Vector2(300f, 22f));
+            sensLabel.rectTransform.anchoredPosition = new Vector2(0f, -54f);
+            var sens = new GameObject("SensSlider", typeof(RectTransform), typeof(Slider)).GetComponent<Slider>();
+            sens.transform.SetParent(set, false);
+            var srt = (RectTransform)sens.transform;
+            srt.anchorMin = new Vector2(0.5f, 1f); srt.anchorMax = new Vector2(0.5f, 1f);
+            srt.sizeDelta = new Vector2(260f, 24f); srt.anchoredPosition = new Vector2(0f, -84f);
+            var sBg = new GameObject("Bg", typeof(RectTransform), typeof(Image)).GetComponent<Image>();
+            sBg.transform.SetParent(srt, false);
+            sBg.rectTransform.anchorMin = Vector2.zero; sBg.rectTransform.anchorMax = Vector2.one;
+            sBg.rectTransform.offsetMin = sBg.rectTransform.offsetMax = Vector2.zero;
+            sBg.color = HudV2Theme.WithAlpha(HudV2Theme.Ink, 0.22f);
+            var sFill = new GameObject("Fill", typeof(RectTransform), typeof(Image)).GetComponent<Image>();
+            sFill.transform.SetParent(srt, false);
+            sFill.sprite = sBg.sprite; sFill.color = HudV2Theme.Hider;
+            var sHandle = new GameObject("Handle", typeof(RectTransform), typeof(Image)).GetComponent<Image>();
+            sHandle.transform.SetParent(srt, false);
+            sHandle.rectTransform.sizeDelta = new Vector2(22f, 22f);
+            sHandle.color = Color.white;
+            sens.fillRect = sFill.rectTransform;
+            sens.handleRect = sHandle.rectTransform;
+            sens.targetGraphic = sHandle;
+            var music = MakeToggle(set, "MusicToggle", "Musik", new Vector2(0.5f, 0f));
+            music.rectTransform.anchoredPosition = new Vector2(-70f, 96f);
+            var sfx = MakeToggle(set, "SfxToggle", "Efek", new Vector2(0.5f, 0f));
+            sfx.rectTransform.anchoredPosition = new Vector2(70f, 96f);
+            Button clear = MakeButton(set, "ClearBoard", "Hapus rekor lokal", new Vector2(0.5f, 0f), HudColor(HudV2Theme.Seeker, 0.9f), 220f, 40f);
+            clear.rectTransform.anchoredPosition = new Vector2(0f, 46f);
+            var hud2 = set.gameObject.AddComponent<HideSeek.UI.HudV2Settings>();
+            var hso = new SerializedObject(hud2);
+            hso.FindProperty("sensitivitySlider").objectReferenceValue = sens;
+            hso.FindProperty("sensitivityLabel").objectReferenceValue = sensLabel;
+            hso.FindProperty("joystick").objectReferenceValue = joy;
+            hso.FindProperty("musicToggle").objectReferenceValue = music;
+            hso.FindProperty("soundToggle").objectReferenceValue = sfx;
+            hso.FindProperty("clearBoardButton").objectReferenceValue = clear;
+            hso.ApplyModifiedPropertiesWithoutUndo();
+
+            // ---- tuai referensi: widget HUD v2 mengisi field UIManager yang sudah ada
+            SetObj(ui, "phaseText", phase);
+            SetObj(ui, "timerText", timer);
+            SetObj(ui, "roleText", role);
+            SetObj(ui, "phaseHintText", hint);
+            SetObj(ui, "countdownText", count);
+            SetObj(ui, "hpText", hpText);
+            SetArr(ui, "hearts", hearts);
+
+            // aksi tombol kecil (memakai API yang memang sudah ada, tanpa field baru)
+            back.onClick.AddListener(delegate
+            {
+                if (HideSeek.Network.NetworkManager.Instance != null) HideSeek.Network.NetworkManager.Instance.LeaveRoom(true);
+                else if (ui != null) ui.ShowToast("Tidak terhubung ke room.");
+            });
+            board.onClick.AddListener(delegate
+            {
+                if (ui != null) { ui.BuildLeaderboard(); }
+                HudV2LocalBoard.RefreshNow();
+            });
+            sound.onClick.AddListener(delegate
+            {
+                bool on = UnityEngine.Audio.AudioListener.volume > 0.01f;
+                UnityEngine.Audio.AudioListener.volume = on ? 0f : 1f;
+                var lbl = sound.GetComponentInChildren<Text>();
+                if (lbl != null) lbl.text = on ? "x" : "~";
+                if (ui != null) ui.ShowToast(on ? "suara dimatikan" : "suara dinyalakan");
+            });
+
+            EditorUtility.SetDirty(ui);
+            UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(ui.gameObject.scene);
+            Debug.Log("[HideSeek] HUD v2 selesai: 5 zona (TL/TC/TR/ML/BR) + 3 tombol skill + safe area + panel Settings.\n"
+                      + "          Lanjut: Setup > 5 (Pasang Art AI - ikut memasang Icon_Freeze + ikon seeker), lalu Play.\n"
+                      + "          Catatan: tombol ke-3 (Bekukan) hanya tampil untuk Hider; Prop memakai tahan->seret->lepas.");
+        }
+
+        /// <summary>Satu tombol skill v2: bingkai bulat + ring cooldown radial + label + ikon.</summary>
+        private static void BuildSkillButton(RectTransform parent, int slot, string hiderLabel, string seekerLabel,
+                                             Vector2 anchoredPos, out Button btn, out Image fill, out Text label)
+        {
+            var go = new GameObject("skill_" + slot + "_" + hiderLabel.Replace(" ", ""),
+                                    typeof(RectTransform), typeof(Image), typeof(Button));
+            go.transform.SetParent(parent, false);
+            var rt = (RectTransform)go.transform;
+            rt.anchorMin = new Vector2(0f, 0f); rt.anchorMax = new Vector2(0f, 0f);
+            rt.sizeDelta = new Vector2(64f, 64f);
+            rt.anchoredPosition = anchoredPos;
+
+            var bg = go.GetComponent<Image>();
+            bg.color = HudColor(new Color(0.06f, 0.14f, 0.11f, 0.9f), 1f);
+            btn = go.GetComponent<Button>();
+            btn.targetGraphic = bg;
+            btn.transition = Selectable.Transition.ColorTint;
+
+            // ring cooldown: radial 360 derajat dari atas (fillOrigin = 3 = Top)
+            fill = new GameObject("ring", typeof(RectTransform), typeof(Image)).GetComponent<Image>();
+            fill.transform.SetParent(rt, false);
+            var frt = fill.rectTransform;
+            frt.anchorMin = Vector2.zero; frt.anchorMax = Vector2.one;
+            frt.offsetMin = frt.offsetMax = Vector2.zero;
+            fill.color = HudColor(new Color(0f, 0f, 0f, 0.55f), 1f);
+            fill.type = Image.Type.Filled;
+            fill.fillMethod = Image.FillMethod.Radial360;
+            fill.fillOrigin = 3;
+            fill.fillAmount = 0f;
+
+            label = MakeText(go.transform, "Label", hiderLabel, 10, new Vector2(0.5f, 0f), new Vector2(64f, 16f));
+            label.rectTransform.anchoredPosition = new Vector2(0f, -18f);
+            label.color = HudV2Theme.Ink;
+
+            var v2 = go.AddComponent<HideSeek.UI.HudV2SkillButton>();
+            var s2 = new SerializedObject(v2);
+            s2.FindProperty("slot").intValue = slot;
+            s2.FindProperty("propAimMode").boolValue = slot == 1;
+            s2.FindProperty("ring").objectReferenceValue = fill;
+            s2.FindProperty("label").objectReferenceValue = label;
+            s2.FindProperty("button").objectReferenceValue = btn;
+            s2.ApplyModifiedPropertiesWithoutUndo();
+        }
+
+        private static RectTransform Zone(RectTransform parent, string name, Vector2 aMin, Vector2 aMax,
+                                          Vector2 pos, Vector2 size)
+        {
+            var go = new GameObject(name, typeof(RectTransform));
+            go.transform.SetParent(parent, false);
+            var rt = (RectTransform)go.transform;
+            rt.anchorMin = aMin; rt.anchorMax = aMax; rt.pivot = new Vector2(aMin.x, aMin.y);
+            rt.sizeDelta = size; rt.anchoredPosition = pos;
+            return rt;
+        }
+
+        private static Button RoundButton(RectTransform parent, string name, string glyph, float size, Vector2 pos)
+        {
+            var go = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(Button));
+            go.transform.SetParent(parent, false);
+            var rt = (RectTransform)go.transform;
+            rt.anchorMin = new Vector2(0f, 1f); rt.anchorMax = new Vector2(0f, 1f);
+            rt.sizeDelta = new Vector2(size, size);
+            rt.pivot = new Vector2(0f, 1f);
+            rt.anchoredPosition = pos;
+            var img = go.GetComponent<Image>();
+            img.color = HudColor(HudV2Theme.Ink, 0.16f);
+            var b = go.GetComponent<Button>();
+            b.targetGraphic = img;
+            b.transition = Selectable.Transition.ColorTint;
+            var t = MakeText(go.transform, "g", glyph, 18, new Vector2(0.5f, 0.5f), new Vector2(size, size));
+            t.alignment = TextAnchor.MiddleCenter;
+            t.color = HudV2Theme.Ink;
+            return b;
+        }
+
+        private static Color HudColor(Color baseColor, float a)
+        {
+            baseColor.a = a;
+            return baseColor;
+        }
+
 
         // ============================ PREFABS ==================================
 

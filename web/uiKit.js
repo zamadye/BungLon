@@ -294,7 +294,91 @@ function makeToaster(hostEl, opt = {}) {
 /** Baris "1 warna = 1 makna": rolepill hijau/ungu mengikuti peran. */
 function roleClass(p) { return !p ? '' : (p.isHider || p.role === 0 ? 'hider' : 'seeker'); }
 
-const BungUI = { clamp, Joystick, SkillButton, Screens, Fx, Viewport, Haptics, makeToaster, roleClass, version: '2.0.0' };
+
+/* ------------------------------- Camera2D --------------------------------- */
+/**
+ * Kamera top-down utk kanvas (padanan web dari Utils/PlayerCamera.cs):
+ * smooth follow + zoom adaptif.
+ *
+ * Kontrak penting: `zoom = 1` artinya SELURUH peta terlihat, jadi zoom > 1
+ * hanya MEMOTONG peta (crop) -> tidak pernah muncul tepi hitam di layar.
+ * Aturan zoom (blueprint 5.2 "zoom out saat lari" + Unity zoomOutOnSeek):
+ *   diam     -> zoomIdle (dekat, enak lihat karakter)
+ *   lari     -> zoomRun  (melebar)
+ *   fase SEEK-> zoomSeek (paling lebar, lihat situasi)
+ * Semua matematika ditaruh di fungsi statis supaya bisa diuji tanpa kanvas.
+ */
+class Camera2D {
+  /**
+   * @param {object} opt {enabled, zoomIdle=1.25, zoomRun=1.08, zoomSeek=1.0,
+   *                      runSpeed=4.2, smooth=0.12, clampToMap=true}
+   */
+  constructor(opt) {
+    const o = opt || {};
+    this.enabled = o.enabled !== false;
+    this.zoomIdle = Number(o.zoomIdle) || 1.25;
+    this.zoomRun = Number(o.zoomRun) || 1.08;
+    this.zoomSeek = Number(o.zoomSeek) || 1.0;
+    this.runSpeed = Number(o.runSpeed) || 4.2;
+    this.smooth = o.smooth === undefined ? 0.12 : Number(o.smooth);
+    this.clampToMap = o.clampToMap !== false;
+    this.x = 0; this.y = 0;
+    this.zoom = this.enabled ? this.zoomIdle : 1;
+  }
+  /** Interpolasi eksponensial (independen frame rate). smooth<=0 = snap. */
+  static approach(cur, target, dt, smooth) {
+    const s = Number(smooth) || 0, h = Math.max(0, Number(dt) || 0);
+    const c = Number(cur), t = Number(target);
+    if (!(isFinite(c) && isFinite(t))) return isFinite(t) ? t : 0;
+    if (s <= 0 || h <= 0) return t;
+    return c + (t - c) * (1 - Math.exp(-h / s));
+  }
+  /** Target zoom dari kecepatan & fase. Lari = interpolate ke zoomRun; SEEK = diperlebar. */
+  static zoomTarget(o) {
+    const obj = o || {};
+    const idle = Number(obj.zoomIdle) || 1, run = Number(obj.zoomRun) || idle;
+    const k = clamp((Number(obj.speed) || 0) / Math.max(0.1, Number(obj.runSpeed) || 4.2), 0, 1);
+    let z = idle + (run - idle) * k;
+    if (obj.seeking) z = Math.min(z, Number(obj.zoomSeek) || z);
+    return clamp(z, 0.2, 4);
+  }
+  /** Jaga view tetap di dalam peta; kalau view lebih besar dari peta -> kembali ke tengah. */
+  static clampToMap(cx, cy, halfViewW, halfViewH, halfMapW, halfMapH) {
+    const mx = Math.max(0, (Number(halfMapW) || 0) - (Number(halfViewW) || 0));
+    const my = Math.max(0, (Number(halfMapH) || 0) - (Number(halfViewH) || 0));
+    return { x: clamp(Number(cx) || 0, -mx, mx), y: clamp(Number(cy) || 0, -my, my) };
+  }
+  /**
+   * Satu langkah kamera.
+   * @param {number} dt  detik
+   * @param {object} st  {tx, ty, speed, seeking} target = pemain lokal
+   * @param {object} view {w, h} ukuran view dlm UNIT (sudah termasuk zoom)
+   * @param {object} map  {w, h} ukuran peta dlm UNIT
+   */
+  step(dt, st, view, map) {
+    const s = st || {};
+    if (!this.enabled) { this.x = 0; this.y = 0; this.zoom = 1; return this; }
+    this.zoom = Camera2D.approach(this.zoom, Camera2D.zoomTarget({
+      zoomIdle: this.zoomIdle, zoomRun: this.zoomRun, zoomSeek: this.zoomSeek,
+      runSpeed: this.runSpeed, speed: s.speed, seeking: s.seeking,
+    }), dt, this.smooth);
+    let cx = Number(s.tx) || 0, cy = Number(s.ty) || 0;
+    if (this.clampToMap && view && map) {
+      const c = Camera2D.clampToMap(cx, cy, view.w / 2, view.h / 2, map.w / 2, map.h / 2);
+      cx = c.x; cy = c.y;
+    }
+    this.x = Camera2D.approach(this.x, cx, dt, this.smooth);
+    this.y = Camera2D.approach(this.y, cy, dt, this.smooth);
+    return this;
+  }
+  /** Skala & offset utk pemetaan dunia->layar (dipakai game.js: W2SX/SX2W). */
+  apply(fitScale, viewPxW, viewPxH) {
+    const scale = fitScale * this.zoom;
+    return { scale, ox: viewPxW / 2 - this.x * scale, oy: viewPxH / 2 + this.y * scale };
+  }
+}
+
+const BungUI = { clamp, Joystick, SkillButton, Screens, Fx, Viewport, Haptics, Camera: Camera2D, makeToaster, roleClass, version: '2.1.0' };
 
 /* dual export: browser (window) + node (test) */
 if (typeof module !== 'undefined' && module.exports) module.exports = BungUI;

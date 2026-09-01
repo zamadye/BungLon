@@ -90,6 +90,7 @@
 
   <!-- toast global: di luar #hud supaya pesan lobby/room/net tetap terbaca -->
   <div id="toasts" aria-live="polite"></div>
+  <div id="aimHint" role="status"></div>
 
   <!-- ============================ SPLASH ============================ -->
   <div id="splash" class="screen on">
@@ -236,7 +237,7 @@
       <h1 class="logo" style="font-size:clamp(18px,5vw,28px)">CARA MAIN</h1>
       <div class="step"><span class="n">1</span><p><b>LOBBY (30s)</b> — masuk room, role dirotasi otomatis tiap ronde.</p></div>
       <div class="step"><span class="n">2</span><p><b>HITUNG MUNDUR (5s)</b> — hafalkan letak prop &amp; tile.</p></div>
-      <div class="step"><span class="n">3</span><p><b>BERSEMBUNYI (30s)</b> — <span class="kbd">1</span> Kamuflase: warna tubuh = rata-rata lantai di bawahmu. <span class="kbd">2</span> Prop Swap: diam di dekat meja/kursi/pot lalu menyamar jadi prop (gerak = membatalkan).</p></div>
+      <div class="step"><span class="n">3</span><p><b>BERSEMBUNYI (30s)</b> — <span class="kbd">1</span> Kamuflase: warna tubuh = rata-rata lantai di bawahmu. <span class="kbd">2</span> Prop Swap: diam di dekat meja/kursi/pot lalu menyamar jadi prop (gerak = membatalkan). <b>Tahan tombolnya lalu seret</b> ke prop tertentu untuk memilih wujud. <span class="kbd">3</span> Bekukan: Seeker dalam 4 unit melambat 2,5 dtk, kamu terpaku 0,8 dtk.</p></div>
       <div class="step"><span class="n">4</span><p><b>DIKEJAR (60s)</b> — seeker 15% lebih cepat + <span class="kbd">Q</span> Radar (mencium posisi 1s) &amp; <span class="kbd">E</span> Sonic Blast (memperlambat + mendorong). Klik/tap dekat hider = menangkap.</p></div>
       <div class="step"><span class="n">5</span><p><b>HASIL (10s)</b> — skor: seeker = 30/tangkapan, hider = detik hidup + 10/HP. Hider terakhir yang hidup = MVP.</p></div>
       <p class="note">Tertangkap 3× = jadi hantu. Bisa hidup lagi lewat <b>📺 +1 Nyawa</b> (iklan) atau nyawa cadangan 💚 yang terpakai otomatis.</p>

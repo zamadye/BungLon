@@ -8,6 +8,9 @@ web/game.js tetap sama dengan C#, jadi rantai kebenarannya:
   C# (SetupTool/ArtInstaller) <- selftest -> web/game.js <- script ini -> PNG.
 
   python3 tools/web_map_preview.py [--out ArtRaw/web_map_preview.png] [--tile 48]
+
+Kamera HUD (uiKit.Camera2D / flag ?cam=0) tidak relevan di sini: render dilakukan
+sendiri (fit penuh), jadi hasil PNG tidak berubah saat follow+zoom dinyalakan.
 Butuh: node + pillow.
 """
 import argparse

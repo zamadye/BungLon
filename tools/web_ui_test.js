@@ -448,6 +448,139 @@ function miniDoc() {
     ok('LOAD sprite game.js tidak dirusak (aset UI tidak masuk atlas)', !/UI_HealthFrame|Icon_Coin/.test(gameJs.slice(0, gameJs.indexOf('const LOAD')) + (gameJs.match(/const LOAD = \[[\s\S]*?\];/) || [''])[0]));
   }
 
+/* ================= [F] UI v2.2: kamera, aim Prop, skill Freeze ================= */
+console.log('\n[F] UI v2.2: kamera follow+zoom, aim Prop, Freeze');
+{
+  const ui = UI, game = gameJs, auKit = rd('audioKit.js'), swSrc = rd('sw.js');
+  const gameExports = require(WEB('game.js'));
+  /* --- Camera2D (padanan Utils/PlayerCamera.cs) --- */
+  const C = ui.Camera;
+  ok('uiKit mengekspor Camera2D sebagai ui.Camera', typeof C === 'function', typeof C);
+  ok('statis approach() ~ Mathf.SmoothDamp (converge, tak overshoot)', (() => {
+    let v = 0, cur = 0, okc = true;
+    for (let i = 0; i < 240; i++) { cur = C.approach(cur, 5, 0.016, 0.12); }
+    okc = Math.abs(cur - 5) < 0.02 && cur <= 5.0001;
+    v = C.approach(0, 0, 0.016, 0.12);
+    return okc && v === 0;
+  })(), C.approach(0, 5, 0.016, 0.12).toFixed(3));
+  ok('zoomTarget: diam > lari > seek', (() => {
+    const a = C.zoomTarget({ zoomIdle: 1.25, zoomRun: 1.08, zoomSeek: 1, runSpeed: 4.8, speed: 0, seeking: false });
+    const b = C.zoomTarget({ zoomIdle: 1.25, zoomRun: 1.08, zoomSeek: 1, runSpeed: 4.8, speed: 9, seeking: false });
+    const c = C.zoomTarget({ zoomIdle: 1.25, zoomRun: 1.08, zoomSeek: 1, runSpeed: 4.8, speed: 9, seeking: true });
+    return a > b && b > c && Math.abs(a - 1.25) < 1e-9 && Math.abs(c - 1) < 1e-9;
+  })(), 'idle/run/seek');
+  ok('zoomTarget: lari tanpa SEEK tidak boleh lebih sempit dari SEEK', (() => {
+    const b = C.zoomTarget({ zoomIdle: 1.25, zoomRun: 1.08, zoomSeek: 1.15, runSpeed: 4.8, speed: 9, seeking: true });
+    return b >= 1.08 - 1e-9 && b <= 1.15 + 1e-9;
+  })(), 'clamp');
+  ok('clampToMap menahan tepi viewport tetap di dalam peta', (() => {
+    const a = C.clampToMap(999, -999, 5, 5, 8.5, 5.5);
+    return Math.abs(a.x - 8.5 + 5) < 1e-9 && Math.abs(a.y + 5.5 - 5) < 1e-9;
+  })(), JSON.stringify(C.clampToMap(999, -999, 5, 5, 8.5, 5.5)));
+  ok('clampToMap: view lebih besar dari peta -> tengah (0,0)', (() => {
+    const a = C.clampToMap(3, 3, 20, 20, 8.5, 5.5);
+    return a.x === 0 && a.y === 0;
+  })(), JSON.stringify(C.clampToMap(3, 3, 20, 20, 8.5, 5.5)));
+  ok('NaN dt tidak merusak kamera (guard untuk tab di-background)', (() => {
+    const cam = new C({}); cam.x = 3; cam.y = -2; cam.zoom = 1.2;
+    cam.step(NaN, { tx: 0, ty: 0, speed: 0, seeking: false }, { w: 20, h: 20 }, { w: 17, h: 11 });
+    return Number.isFinite(cam.x) && Number.isFinite(cam.y) && Number.isFinite(cam.zoom);
+  })(), 'finite');
+  ok("kamera nonaktif (?cam=0) -> x=y=0, zoom=1, netral utk render fit", (() => {
+    const cam = new C({ enabled: false });
+    cam.step(0.016, { tx: 5, ty: 5, speed: 9, seeking: true }, { w: 8, h: 8 }, { w: 17, h: 11 });
+    return cam.x === 0 && cam.y === 0 && cam.zoom === 1;
+  })(), 'disabled');
+  ok('apply() = scale fitScale*zoom, offset terpusat, tanpa letterbox', (() => {
+    const cam = new C({ zoomIdle: 1.25, zoomRun: 1.25, zoomSeek: 1.25, runSpeed: 0.001 });
+    const viewPx = { w: 800, h: 600 };
+    cam.step(1, { tx: 0, ty: 0, speed: 5, seeking: false }, { w: viewPx.w / 40 / 1.25, h: viewPx.h / 40 / 1.25 }, { w: 17, h: 11 });
+    const a = cam.apply(40, 800, 600);
+    const b = cam.apply(40, 800, 600);
+    return Math.abs(a.scale - 40 * cam.zoom) < 1e-6 && Math.abs(a.ox - 400 + cam.x * a.scale) < 1e-6 && JSON.stringify(a) === JSON.stringify(b);
+  })(), 'deterministik');
+
+  /* --- aturan: kandidat prop, swap ber-arah, Freeze --- */
+  const G = gameExports || {};
+  const R = G.Round, P = G.PlayerState, CFG = G.CFG;
+  ok('game.js mengekspor Round/PlayerState/CFG utk uji aturan', !!R && !!P && !!CFG, [typeof R, typeof P]);
+  ok('CFG punya kunci kamera & Freeze (paritas dgn HideSeekConstants.cs)',
+    ['freezeRadius', 'freezeTime', 'freezeSlow', 'freezeCd', 'freezeRoot', 'propAimRadius', 'camIdle', 'camRun', 'camSeek', 'camRunSpeed', 'camSmooth'].every(k => typeof CFG[k] === 'number'), JSON.stringify(CFG.freezeRadius));
+  ok('freezeSlow di (0,1) dan freezeCd > hiderCd/2 (skill taktis, bukan spam)',
+    CFG.freezeSlow > 0 && CFG.freezeSlow < 1 && CFG.freezeCd > CFG.hiderCd / 2, [CFG.freezeSlow, CFG.freezeCd]);
+  {
+    const mk = (id, role) => new P(id, 'P' + id, role);
+    const r = new R();
+    const h = mk(1, 0), sk = mk(2, 1);
+    r.add(h); r.add(sk); r.seekerId = 2; r.myId = 1; r.start(false);
+    r.phase = 'HIDE'; r.phaseEnd = r.t + 30;
+    h.isBot = sk.isBot = false;
+    const pr = r.map.props[0];
+    h.x = pr.wx; h.y = pr.wy; h.role = 0; h.cdHider = 0; h.cdFreeze = 0;
+    const cand = r.propCandidates(h, 3);
+    ok('propCandidates(p,r) hanya mengembalikan prop di dalam radius & punya name+def',
+      cand.length > 0 && cand.every(c => typeof c.name === 'string' && !!c.def) && cand.some(c => c.def === pr.def), cand.length);
+    h.cdHider = 0;
+    ok('usePropSwap dgn nama tujuan = prop itu (aim); tanpa nama = tetap dapat sesuatu', (() => {
+      h.propDef = null; h.cdHider = 0;
+      const want = cand.find(c => c.def !== pr.def) || cand[0];
+      const ok1 = r.usePropSwap(h, want.name) && h.propDef === want.def;
+      h.propDef = null; h.cdHider = 0;
+      const ok2 = r.usePropSwap(h) && !!h.propDef;
+      return ok1 && ok2;
+    })(), 'aim + fallback');
+    ok('usePropSwap menolak nama di luar radius (tidak bisa teleport-wujud)', (() => {
+      h.propDef = null; h.cdHider = 0;
+      const far = r.map.props.map(q => q.def.name).filter(n => !cand.some(c => c.name === n))[0];
+      if (!far) return true;
+      h.x = 0; h.y = 0;
+      const got = r.usePropSwap(h, far);
+      return got === true && h.propDef && h.propDef.name !== far;   // tetap swap, tapi bukan prop jauh
+    })(), 'fallback ke kandidat lokal');
+    ok('useFreeze: Seeker dalam radius melambat + pemakai terpaku + cooldown sendiri', (() => {
+      h.x = 0; h.y = 0; h.cdFreeze = 0; h.rootUntil = 0; h.role = 0;
+      sk.role = 1; sk.slowUntil = 0; sk.slowFactor = 1; sk.x = CFG.freezeRadius * 0.5; sk.y = 0;
+      const fired = r.useFreeze(h);
+      return fired === true && sk.slowUntil > r.t && Math.abs(sk.slowFactor - CFG.freezeSlow) < 1e-9
+        && Math.abs(h.cdFreeze - (r.t + CFG.freezeCd)) < 1e-9 && h.rootUntil > r.t
+        && Math.abs(h.rootUntil - (r.t + CFG.freezeRoot)) < 1e-9;
+    })(), 'freeze');
+    ok('useFreeze kedua kali ditolak (cooldown) dan tidak menyentuh Seeker', (() => {
+      sk.slowUntil = 0; sk.slowFactor = 1;
+      const before = h.cdFreeze;
+      const fired = r.useFreeze(h);
+      return fired === false && sk.slowUntil === 0 && h.cdFreeze === before;
+    })(), 'cd');
+    ok('root membekukan langkah pemain (v=0) sampai rootUntil lewat', (() => {
+      h.input.dx = 1; h.input.dy = 0; h.x = 0; h.y = 0;
+      h.rootUntil = r.t + 1.0; r.movePlayer(h, 0.05);
+      const stuck = Math.abs(h.x) < 1e-9;
+      h.rootUntil = 0; r.movePlayer(h, 0.05);
+      return stuck && Math.abs(h.x) > 0;
+    })(), 'root');
+    ok('seeker yang jauh tidak ikut melambat', (() => {
+      sk.slowUntil = 0; sk.slowFactor = 1; sk.x = CFG.freezeRadius + 6; sk.y = 4; h.cdFreeze = 0;
+      r.useFreeze(h);
+      return sk.slowUntil === 0;
+    })(), 'radius');
+  }
+
+  /* --- jaring UI: tombol #3, ikon, CSS, SFX, presache --- */
+  ok('index.html: elemen #aimHint untuk petunjuk mode seret', /id="aimHint"/.test(html), '');
+  ok('ui.css: gaya .skill.aiming (outline es) ada', /\.skill\.aiming\{/.test(css), '');
+  ok('ui.css: gaya .skill.picked (centang pilihan) ada', /\.skill\.picked::after\{/.test(css), '');
+  ok('ui.css: #aimHint.on tampil + varian kecil utk <=400px', /#aimHint\.on\{/.test(css) && /#aimHint\{font-size:11px/.test(css), '');
+  ok('ui.css: aksen skill #3 (Icon_Freeze) didefinisikan', /\.skill\[data-field="skill3"\]/.test(css), '');
+  ok('game.js: slot ke-3 hider memakai Icon_Freeze + label Bekukan',
+    /\[\s*'Icon_Freeze',\s*'Bekukan',\s*'3',\s*'skill3'\s*\]/.test(game), '');
+  ok('game.js: tombol Prop (hider) dipasang tahan->seret->lepas', /aimStart\(ev\)/.test(game) && /aimEnd\(true\)/.test(game) && /aimEnd\(false\)/.test(game), '');
+  ok('game.js: keyboard "3" memicu skill3', /if \(k === '3'\) press\('skill3'\)/.test(game), '');
+  ok('game.js: event freeze diberi SFX + haptic + partikel', /case 'freeze':[\s\S]{0,320}?sfx\('freeze'\)/.test(game), '');
+  ok('game.js: protokol net mengirim pilihan prop (pn) & skill3 (s3)', /s3: p\.input\.skill3/.test(game) && /pn: p\.pendingPropName/.test(game), '');
+  ok('audioKit: resep SFX freeze & aim ada', /\n\s*freeze: \[/.test(auKit) && /\n\s*aim: \[/.test(auKit), '');
+  ok('sw.js: Icon_Freeze ikut di-precache', /Icon_Freeze\.png/.test(swSrc), '');
+}
+
   console.log(`\n=== web_ui_test: ${pass} PASS, ${fail} FAIL ===`);
   process.exitCode = fail ? 1 : 0;
 })().catch(e => { console.error('\x1b[31mEXCEPTION\x1b[0m', e && e.stack || e); process.exitCode = 1; });

@@ -189,6 +189,11 @@ namespace HideSeek.Players
 
             // Umpan balik visual
             if (hitVfx != null) hitVfx.Play();
+
+            // HUD v2: angka damage melayang (padanan fx.damage() di web). Aman bila HUD tidak ada.
+            if (HideSeek.UI.HudV2DamageText.Available)
+                HideSeek.UI.HudV2DamageText.Spawn(new Vector2(transform.position.x, transform.position.y + 0.6f),
+                    "-1", HideSeek.UI.HudV2Theme.Seeker);
             if (hitSfx != null && hitClip != null) hitSfx.PlayOneShot(hitClip);
 
             StartPushback(new Vector2(dirX, dirY).normalized);

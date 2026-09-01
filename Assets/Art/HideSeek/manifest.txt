@@ -16,6 +16,7 @@ Icon_PropSwap           112x112  avg RGB = (153,103, 70)  #996746
 Icon_Radar              112x112  avg RGB = ( 84,121,152)  #547998
 Icon_SonicBlast         112x112  avg RGB = (177, 95, 81)  #B15F51
 Icon_Revive             112x112  avg RGB = (188, 58, 51)  #BC3A33
+Icon_Freeze             112x112  avg RGB = (130,179,199)  #82B3C7
 Tile_Grass              128x128  avg RGB = ( 73,135, 25)  #498719
 Tile_Sand               128x128  avg RGB = (217,166, 95)  #D9A65F
 Tile_Stone              128x128  avg RGB = (124,128,127)  #7C807F

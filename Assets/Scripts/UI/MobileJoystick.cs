@@ -35,6 +35,14 @@ namespace HideSeek.UI
         [Tooltip("Magnitude output saat handle di tepi (1 = penuh).")]
         [Range(0.1f, 1f)] public float maxOutput = 1f;
 
+        /// <summary>
+        /// Sensitivitas pemain (0.7 - 1.5, sama seperti web/uiKit.js Joystick.sensitivity):
+        /// memperkuat kemiringan tuas sehingga gerakan kecil sudah cepat, TAPI hasil akhir
+        /// tetap di-clamp ke 1 supaya kecepatan maksimum game tidak berubah.
+        /// Diatur dari HudV2Settings (disimpan di PlayerPrefs "hideseek_ui.sens").
+        /// </summary>
+        [Range(0.5f, 2f)] public float sensitivity = 1f;
+
         /// <summary>Input ter-normalisasi ( magnitude 0..1 ). Dibaca PlayerController.</summary>
         public Vector2 Direction { get; private set; }
 
@@ -116,7 +124,8 @@ namespace HideSeek.UI
 
             float out01 = Mathf.Clamp01(mag / r);
             Vector2 dir = out01 < deadzone ? Vector2.zero : delta / r;
-            dir = Vector2.ClampMagnitude(dir, 1f) * (maxOutput * out01);
+            // Sensitivitas dipakai SEBELUM clamp: tuas lebih "galak", batas atas tetap 1.
+            dir = Vector2.ClampMagnitude(dir * Mathf.Clamp(sensitivity, 0.5f, 2f), 1f) * (maxOutput * out01);
             if (dir.sqrMagnitude < deadzone * deadzone) dir = Vector2.zero;
 
             Direction = dir;
@@ -132,6 +141,12 @@ namespace HideSeek.UI
             ResetHandle();
 
             if (floatingOrigin && background != null) background.anchoredPosition = defaultAnchoredPos;
+        }
+
+        /// <summary>Terapkan sensitivitas tersimpan (dipanggil Awake & saat panel Settings dibuka).</summary>
+        public void ApplyStoredSensitivity()
+        {
+            sensitivity = HudV2Settings.StoredSensitivity;
         }
 
         private void ResetHandle()

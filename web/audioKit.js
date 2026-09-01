@@ -19,6 +19,8 @@ const SFX = {
   skill: ['sweep', 320, 780, 0.16, 0.16],
   camo: ['sweep', 700, 240, 0.35, 0.12],
   swap: ['sweep', 420, 1040, 0.14, 0.18],
+  freeze: ['sweep', 1500, 300, 0.45, 0.18],   // es menjalar (frekuensi turun cepat)
+  aim: ['blip', 880, 1080, 0.06, 0.12],       // masuk mode seret prop
   radar: ['blip', 1180, 1180, 0.09, 0.14],
   blast: ['noise', 240, 60, 0.34, 0.24],
   catch: ['noise', 180, 50, 0.22, 0.3],

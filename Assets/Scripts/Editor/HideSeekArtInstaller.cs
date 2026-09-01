@@ -292,8 +292,10 @@ namespace HideSeek.EditorTools
             if (ui == null) { Skip("UIManager tidak ada di scene aktif (jalankan Setup > 3 dulu)"); return; }
 
             // ikon skill: gambar kecil di dalam tombol + label digeser ke bawah
+            // 1 tombol per SLOT (HUD v2): slot 0 Kamuflase/Radar, 1 Prop/Blast, 2 Bekukan.
             var icons = new[] { LoadSprite("Icons/Icon_Camouflage"), LoadSprite("Icons/Icon_PropSwap"),
-                                LoadSprite("Icons/Icon_Radar"), LoadSprite("Icons/Icon_SonicBlast") };
+                                LoadSprite("Icons/Icon_Freeze") };
+            var seekerIcons = new[] { LoadSprite("Icons/Icon_Radar"), LoadSprite("Icons/Icon_SonicBlast") };
             var so = new SerializedObject(ui);
             var skills = so.FindProperty("skills");
             if (skills != null)
@@ -306,6 +308,19 @@ namespace HideSeek.EditorTools
                     Sprite icon = i < icons.Length ? icons[i] : null;
                     if (icon == null) continue;
                     MakeIconOverlay(b, icon);
+                    // HUD v2: ikon versi Seeker dipasang ke field seekerIcon agar tombol yang sama
+                    // menampilkan Radar/Blast saat pemain jadi Seeker (sama seperti web).
+                    if (i < seekerIcons.Length && seekerIcons[i] != null)
+                    {
+                        var v2 = b.GetComponentInParent<HideSeek.UI.HudV2SkillButton>();
+                        if (v2 != null)
+                        {
+                            var sp = new SerializedObject(v2);
+                            var prop = sp.FindProperty("seekerIcon");
+                            if (prop != null) { prop.objectReferenceValue = seekerIcons[i]; sp.ApplyModifiedPropertiesWithoutUndo(); }
+                            Log("ikon seeker slot " + i + " = " + seekerIcons[i].name);
+                        }
+                    }
                     Log("ikon skill slot " + i + " = " + icon.name);
                 }
             }

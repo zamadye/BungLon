@@ -577,6 +577,29 @@ namespace HideSeek.Players
         // EventData dikirim oleh PhotonNetwork.RaiseEvent (lihat HideSeekConstants.Net).
         public void OnEvent(EventData photonEvent)
         {
+            // ---- FREEZE (skill #3 Hider): pulsa area; hanya Seeker di dalam radius yang terpengaruh.
+            // Setiap klien memutuskan sendiri apakah ia kena (tanpa RPC lintas owner).
+            if (photonEvent.Code == HideSeekConstants.EvtFreeze)
+            {
+                var fz = photonEvent.CustomData as Hashtable;
+                if (fz == null) return;
+                if (Role != GameRole.Seeker || IsGhost) return;
+                float fx = HideSeekConstants.GetProp(fz, "x", 0f);
+                float fy = HideSeekConstants.GetProp(fz, "y", 0f);
+                float fr = HideSeekConstants.GetProp(fz, "r", HideSeekConstants.FreezeRadius);
+                float ff = HideSeekConstants.GetProp(fz, "f", HideSeekConstants.FreezeSlowFactor);
+                float fd = HideSeekConstants.GetProp(fz, "d", HideSeekConstants.FreezeDuration);
+                if ((NetPosition - new Vector2(fx, fy)).sqrMagnitude > fr * fr) return;
+                ApplySpeedSlow(ff, fd);
+                if (Time.frameCount != lastFlashFrame)
+                {
+                    lastFlashFrame = Time.frameCount;
+                    StartCoroutine(CoroutineSlowFlash());
+                }
+                if (UIManager.Instance != null) UIManager.Instance.ShowToast("Kaki membeku! " + fd.ToString("0.0") + "s");
+                return;
+            }
+
             if (photonEvent.Code != HideSeekConstants.EvtSlow) return;
             var p = photonEvent.CustomData as Hashtable;
             if (p == null) return;

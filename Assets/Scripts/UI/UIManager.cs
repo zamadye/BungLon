@@ -68,11 +68,13 @@ namespace HideSeek.UI
         [Tooltip("3 buah Image hati: aktif = warna penuh, habis = alpha 0.2 (opsional).")]
         public Image[] hearts;
 
-        [Header("Skill (2 tombol, sesuai spesifikasi)")]
+        [Header("Skill (2 tombol utk Seeker, 3 utk Hider)")]
+        [Tooltip("Slot 2 khusus Hider: Bekukan/Freeze (paritas web: skill3 + Icon_Freeze).")]
         public SkillButtonConfig[] skills = new SkillButtonConfig[]
         {
             new SkillButtonConfig { hiderLabel = "Kamuflase", seekerLabel = "Radar" },
-            new SkillButtonConfig { hiderLabel = "Prop Swap", seekerLabel = "Sonic Blast" }
+            new SkillButtonConfig { hiderLabel = "Prop Swap", seekerLabel = "Sonic Blast" },
+            new SkillButtonConfig { hiderLabel = "Bekukan", seekerLabel = "" }
         };
 
         [Header("Referensi lain")]
@@ -265,15 +267,22 @@ namespace HideSeek.UI
         private void UpdateTimerText()
         {
             if (gm == null) return;
-            string t = Net.FormatTime(gm.StateRemaining);
+            // HUD v2: MM:SS + 3 state warna (biru / kuning <10s / merah <=5s) + detak saat genting.
+            string t = HudV2Theme.Clock(gm.StateRemaining);
             if (t != lastTimerShown)
             {
                 lastTimerShown = t;
                 if (timerText != null)
                 {
                     timerText.text = t;
-                    timerText.color = gm.StateRemaining <= 10f ? new Color(1f, 0.35f, 0.3f) : Color.white;
+                    timerText.color = HudV2Theme.TimerColor(gm.StateRemaining);
                 }
+            }
+            if (timerText != null)
+            {
+                float k = HudV2Theme.TimerPulse(gm.StateRemaining);
+                var tr = timerText.rectTransform;
+                if (tr != null) tr.localScale = Vector3.one * k;
             }
             if (phaseText != null) phaseText.text = PhaseLabel(gm.State);
         }
@@ -333,9 +342,16 @@ namespace HideSeek.UI
                 if (cfg == null) continue;
 
                 bool isSeeker = localController != null && localController.Role == GameRole.Seeker;
+                bool freezeSlot = i == 2;
+                // Slot ke-3 khusus Hider (Bekukan) -> disembunyikan untuk Seeker, bukan sekadar disabled.
+                if (freezeSlot && cfg.button != null && cfg.button.gameObject != null)
+                    cfg.button.gameObject.SetActive(!isSeeker);
+                if (freezeSlot && isSeeker) continue;
+
                 float remain = 0f, total = 1f;
 
                 if (isSeeker && ss != null) { remain = ss.CooldownRemaining; total = Mathf.Max(0.01f, ss.cooldown); }
+                else if (hs != null && freezeSlot) { remain = hs.FreezeCooldownRemaining; total = Mathf.Max(0.01f, HideSeekConstants.FreezeCooldown); }
                 else if (hs != null) { remain = hs.CooldownRemaining; total = Mathf.Max(0.01f, hs.cooldown); }
 
                 if (cfg.button != null)
@@ -348,7 +364,8 @@ namespace HideSeek.UI
                     cfg.cooldownFill.fillAmount = Mathf.Clamp01(remain / total);
                 if (cfg.cooldownText != null)
                 {
-                    cfg.cooldownText.text = remain > 0.05f ? Mathf.CeilToInt(remain).ToString() : (i == 0 ? (isSeeker ? "R" : "C") : (isSeeker ? "B" : "P"));
+                    cfg.cooldownText.text = remain > 0.05f ? Mathf.CeilToInt(remain).ToString()
+                        : (i == 0 ? (isSeeker ? "R" : "C") : i == 1 ? (isSeeker ? "B" : "P") : "F");
                     cfg.cooldownText.color = remain > 0.05f ? Color.white : new Color(1f, 1f, 1f, 0.75f);
                 }
             }
@@ -368,13 +385,15 @@ namespace HideSeek.UI
                     var cfg = skills[i];
                     if (cfg == null || cfg.button == null) continue;
                     var lbl = cfg.button.GetComponentInChildren<Text>();
+                    if (i == 2 && cfg.button != null && cfg.button.gameObject != null)
+                        cfg.button.gameObject.SetActive(role != GameRole.Seeker);
                     if (lbl != null) lbl.text = role == GameRole.Seeker ? cfg.seekerLabel : cfg.hiderLabel;
                 }
             }
             if (phaseHintText != null && gm != null)
                 phaseHintText.text = role == GameRole.Seeker
                     ? "Tap/klik pada Hider untuk menangkap (max 3 unit)."
-                    : "Skill 1: menyatu dengan warna lantai. Skill 2: jadi prop (jangan bergerak!)";
+                    : "Skill 1: menyatu dengan warna lantai. Skill 2: jadi prop (jangan bergerak!). Skill 3: bekukan Seeker di sekitarmu.";
         }
 
         /// <summary>Dipanggil PlayerController.SetSpectator: matikan tombol & tampilkan mode hantu.</summary>
@@ -509,6 +528,35 @@ namespace HideSeek.UI
 
         // ============================== TOAST ==================================
 
+        // ============================ FREEZE (skill #3) =======================
+
+        [Tooltip("Root transform tempat ring efek Bekukan dibuat (boleh kosong = tanpa ring).")]
+        public Transform freezeFxRoot;
+        [Tooltip("Prefab ring efek Bekukan (kosong = pakai kotak sementara, seperti SonicBlastEffect).")]
+        public GameObject freezeRingPrefab;
+
+        /// <summary>Posisi & sisa waktu pulsa Freeze terakhir (dipakai efek/minimap). 0 = tidak ada.</summary>
+        [HideInInspector] public Vector2 lastFreezePos;
+        [HideInInspector] public float lastFreezeUntil;
+
+        /// <summary>
+        /// Dipanggil HiderSkill saat skill Bekukan dipakai: simpan data pulsa + toast.
+        /// Ring visual dibuat di sini (bukan di skill) supaya efek tetap konsisten di semua klien
+        /// dan tidak menambah dependensi script skill ke sistem VFX.
+        /// </summary>
+        public void NotifyFreeze(Vector2 worldPos, float radius)
+        {
+            lastFreezePos = worldPos;
+            lastFreezeUntil = Time.time + HideSeekConstants.FreezeDuration;
+            ShowToast("Bekukan! radius " + radius.ToString("0.0") + " unit");
+            if (freezeRingPrefab != null && freezeFxRoot != null)
+            {
+                var go = Instantiate(freezeRingPrefab, worldPos, Quaternion.identity, freezeFxRoot);
+                go.transform.localScale = Vector3.one * Mathf.Max(1f, radius * 2f);
+                Destroy(go, 0.6f);
+            }
+        }
+
         /// <summary>Pesan singkat di tengah-bawah layar (dipanggil juga oleh NetworkManager & skills).</summary>
         public void ShowToast(string message)
         {
@@ -558,6 +606,20 @@ namespace HideSeek.UI
                                         "\nWaktu sisa: " + Net.FormatTime(gm.StateRemaining);
             }
             BuildLeaderboard();
+
+            // HUD v2: rekor lokal (PlayerPrefs, top-10) - kosmetik, sama seperti web (hideseek_scores).
+            if (gm != null && HudV2LocalBoard.Available)
+            {
+                List<GameManager.LeaderboardEntry> rows = gm.BuildLeaderboard();
+                string me = LocalPlayerName;
+                for (int i = 0; i < rows.Count; i++)
+                {
+                    if (rows[i].name != me) continue;
+                    HudV2LocalBoard.Submit(me, rows[i].score);
+                    break;
+                }
+                HudV2LocalBoard.RefreshNow();
+            }
         }
 
         /// <summary>Bangun ulang baris leaderboard dari data room (pooling sederhana).</summary>
@@ -665,8 +727,11 @@ namespace HideSeek.UI
 
         // ================================ MISC =================================
 
-        /// <summary>Klik tombol skill -> routing ke komponen skill sesuai role lokal.</summary>
-        private void OnSkillClicked(int slot)
+        /// <summary>
+        /// Routing skill sesuai role lokal. propId (slot 1, Hider) = wujud hasil "tahan -> seret ->
+        /// lepas" pada HudV2SkillButton; 0 = biarkan game memilih (perilaku lama).
+        /// </summary>
+        public void UseSkill(int slot, byte propId = 0)
         {
             if (localController == null) { ShowToast("Player belum siap."); return; }
             if (localController.IsGhost) { ShowToast("Hantu tidak bisa memakai skill."); return; }
@@ -674,9 +739,13 @@ namespace HideSeek.UI
             if (localController.Role == GameRole.Seeker && localController.SeekerSkills != null)
                 localController.SeekerSkills.TryUseSkill(slot);
             else if (localController.Role == GameRole.Hider && localController.HiderSkills != null)
-                localController.HiderSkills.TryUseSkill(slot);
-            else
-                ShowToast("Skill belum tersedia untuk role ini.");
+                localController.HiderSkills.TryUseSkill(slot, propId);
+        }
+
+        /// <summary>Tombol skill (HUD lama) -> routing yang sama dengan HUD v2.</summary>
+        private void OnSkillClicked(int slot)
+        {
+            UseSkill(slot, 0);
         }
 
         /// <summary>Shortcut desktop: 1 / 2 = skill, Space = start (host). Tidak mengganggu di mobile.</summary>
@@ -689,6 +758,15 @@ namespace HideSeek.UI
 
         /// <summary>Akses joystick untuk PlayerController (bisa null bila UI tidak memakainya).</summary>
         public MobileJoystick Joystick { get { return joystick; } }
+
+        /// <summary>Controller pemain lokal (dipakai widget HUD v2 - jangan mengubah state dari sini).</summary>
+        public PlayerController LocalController { get { return localController; } }
+
+        /// <summary>Nama pemain lokal (untuk penanda baris di papan skor lokal HUD v2).</summary>
+        public string LocalPlayerName
+        {
+            get { return PhotonNetwork.LocalPlayer != null ? PhotonNetwork.LocalPlayer.NickName : string.Empty; }
+        }
         /// <summary>Akses minimap untuk SeekerSkill (bisa null).</summary>
         public MinimapRadarView Minimap { get { return minimap; } }
     }

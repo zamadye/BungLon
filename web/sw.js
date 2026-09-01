@@ -10,7 +10,7 @@
  * ========================================================================== */
 'use strict';
 
-const VERSION = 'v2.1-fx-1';
+const VERSION = 'v2.2-freeze-1';
 const CACHE_SHELL = 'hideseek-shell-' + VERSION;
 const CACHE_ASSETS = 'hideseek-assets-' + VERSION;
 const CACHE_PAGES = 'hideseek-pages-' + VERSION;
@@ -23,7 +23,7 @@ const SHELL = [
   './assets/Chameleon_Hider.png', './assets/Chameleon_Seeker.png',
   './assets/Tile_Grass.png', './assets/Tile_Sand.png', './assets/Tile_Stone.png', './assets/Tile_Wood.png',
   './assets/Hedge_Wall.png', './assets/Bg_Lobby.png', './assets/AppIcon.png', './assets/Logo_HideSeek.png',
-  './assets/Bg_Splash.jpg', './assets/Icon_Coin.png', './assets/Icon_Life.png',
+  './assets/Bg_Splash.jpg', './assets/Icon_Coin.png', './assets/Icon_Life.png', './assets/Icon_Freeze.png',
   './assets/UI_HealthFrame.png', './assets/UI_MinimapFrame.png',
 ];
 

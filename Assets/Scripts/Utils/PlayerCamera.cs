@@ -26,9 +26,18 @@ namespace HideSeek.Utils
         [Header("Follow")]
         [Tooltip("0 = snap, 0.1-0.2 = halus.")]
         public float smoothTime = 0.12f;
-        [Tooltip("Tinggi kamera tetap dipertahankan selama fase HIDE? (biar tidak bocor posisi)")]
+        [Tooltip("Melebar selama fase SEEK (biar kedua tim punya gambaran ruang).")]
         public bool zoomOutOnSeek = true;
         public float seekExtraSize = 1.5f;
+
+        [Header("Zoom adaptif (parity web: Camera2D)")]
+        [Tooltip("Bila true, lebar kamera diambil dari rasio konstanta CamIdleZoom/CamSeekZoom "
+                  + "dan CamRunZoom (bukan dari seekExtraSize di atas).")]
+        public bool useConstantZoomRatio = true;
+        [Tooltip("Melebar saat pemain lokal berlari penuh (bergerak dengan input maksimum).")]
+        public bool zoomOutOnRun = true;
+        [Tooltip("Ambang kecepatan (unit/detik) untuk dianggap "lari".")]
+        public float runSpeedThreshold = HideSeekConstants.CamRunSpeed;
 
         [Header("Boundary (opsional)")]
         public bool clampToBoundary = false;
@@ -57,10 +66,10 @@ namespace HideSeek.Utils
             Transform t = ResolveTarget();
             if (t == null) return;
 
-            // Zoom out sedikit saat fase mengejar agar Seeker punya gambaran ruang.
+            // ---- zoom adaptif (sumber angka yang sama dengan web) ----
+            // Base = kondisi TERDEKAT (zoomIdle). "Melebar" = orthoSize dikali rasio zoom.
             GameManager gm = GameManager.Instance;
-            float want = baseSize;
-            if (zoomOutOnSeek && gm != null && gm.State == GameState.SeekPhase) want = baseSize + seekExtraSize;
+            float want = WantedSize(gm, t);
             if (!Mathf.Approximately(cam.orthographicSize, want))
                 cam.orthographicSize = Mathf.Lerp(cam.orthographicSize, want, Time.deltaTime * 3f);
 
@@ -68,7 +77,43 @@ namespace HideSeek.Utils
             dest.z = cam.transform.position.z;
             if (clampToBoundary) dest = Clamp(dest);
 
+            // SmoothDamp memakai smoothTime (0 = snap); web memakai angka yang sama (CamSmoothTime).
             transform.position = Vector3.SmoothDamp(transform.position, dest, ref velocity, Mathf.Max(0.01f, smoothTime));
+        }
+
+        /// <summary>
+        /// Ukuran ortho yang diinginkan. idle < run < seek (makin besar = makin lebar).
+        /// Dengan useConstantZoomRatio rasio diambil dari HideSeekConstants supaya angka Unity
+        /// dan web (CFG.camIdle/camRun/camSeek) tidak pernah berbeda.
+        /// </summary>
+        private float WantedSize(GameManager gm, Transform target)
+        {
+            float want = baseSize;
+            if (!useConstantZoomRatio)
+            {
+                if (zoomOutOnSeek && gm != null && gm.State == GameState.SeekPhase) want = baseSize + seekExtraSize;
+                return want;
+            }
+            if (zoomOutOnSeek && gm != null && gm.State == GameState.SeekPhase)
+                want = baseSize * Ratio(HideSeekConstants.CamSeekZoom);
+            if (zoomOutOnRun && IsRunning(target))
+                want = Mathf.Max(want, baseSize * Ratio(HideSeekConstants.CamRunZoom));
+            return want;
+        }
+
+        /// <summary>zoomIdle / zoom = faktor pelebaran (zoom <= 0 dianggap 1 supaya tidak habis).</summary>
+        private static float Ratio(float zoom)
+        {
+            float z = Mathf.Max(0.05f, zoom);
+            return HideSeekConstants.CamIdleZoom / z;
+        }
+
+        /// <summary>"Lari" = input gerak maksimum (joystick ditekan penuh). Murah: tanpa raycast.</summary>
+        private static bool IsRunning(Transform target)
+        {
+            PlayerController pc = target != null ? target.GetComponent<PlayerController>() : null;
+            if (pc == null || pc.IsGhost) return false;
+            return pc.MoveInput.sqrMagnitude >= 0.9f * 0.9f;
         }
 
         /// <summary>Pilih target: pemain lokal -> (bila hantu) Seeker -> siapa saja.</summary>

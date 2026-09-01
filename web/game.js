@@ -30,6 +30,12 @@ const CFG = {
   seekerMult: 1.15,                    // SeekerSpeedMultiplier
   hiderCd: 10.0, seekerCd: 8.0,        // HiderSkillCooldown / SeekerSkillCooldown
   propSwapTime: 8.0,                   // PropSwapDuration
+  // FREEZE (skill #3 Hider) — HideSeekConstants.Freeze* ; cooldown sendiri, bukan cdHider.
+  freezeRadius: 4.0, freezeTime: 2.5,  // FreezeRadius / FreezeDuration
+  freezeSlow: 0.35, freezeCd: 14.0,    // FreezeSlowFactor / FreezeCooldown
+  freezeRoot: 0.8,                      // FreezeSelfRoot (tradeoff: hider diam sebentar)
+  propAimRadius: 2.5,                   // PropAimPickRadius (mode tahan-seret-lepas)
+  camIdle: 1.25, camRun: 1.08, camSeek: 1.0, camRunSpeed: 4.8, camSmooth: 0.12, // PlayerCamera
   blastRadius: 5.0, blastRadiusSqr: 25.0,
   slowFactor: 0.5, slowTime: 2.0,      // SonicBlastSlowFactor / SlowDuration
   pushback: 3.0, pushbackTime: 0.35, invuln: 0.6,   // CatchPushback/PushbackDuration/Immunity
@@ -352,13 +358,14 @@ class PlayerState {
     this.camoRgb = null; this.camoTarget = null;
     this.propDef = null; this.propUntil = 0;
     this.slowUntil = 0; this.slowFactor = 1;
+    this.cdFreeze = 0; this.rootUntil = 0;   // skill #3 (Freeze) + root diri sendiri
     this.boostUntil = 0; this.boostMult = 1; this.boostRange = 0;
     this.pushUntil = 0; this.pushVx = 0; this.pushVy = 0;
     this.invulnUntil = 0; this.safeUntil = 0;
     this.cdHider = 0; this.cdSeeker = 0; this.lastCatch = -9;
     this.catches = 0; this.survived = 0; this.score = 0;
     this.isBot = false; this.brain = { t: 0, goal: null, mood: 0 };
-    this.input = { dx: 0, dy: 0, skill1: false, skill2: false, tap: false };
+    this.input = { dx: 0, dy: 0, skill1: false, skill2: false, skill3: false, tap: false };
     this.spawnX = 0; this.spawnY = 0;
   }
   get isHider() { return this.role === 0; }
@@ -444,8 +451,9 @@ class Round {
       p.ghost = false; p.alive = true;
       p.camoRgb = p.camoTarget = null; p.propDef = null; p.propUntil = 0;
       p.slowUntil = 0; p.boostUntil = 0; p.pushUntil = 0; p.invulnUntil = 0; p.safeUntil = 0;
+      p.cdFreeze = 0; p.rootUntil = 0;
       p.cdHider = p.cdSeeker = 0; p.catches = 0; p.survived = 0; p.score = 0; p.lastCatch = -9;
-      p.input = { dx: 0, dy: 0, skill1: false, skill2: false, tap: false };
+      p.input = { dx: 0, dy: 0, skill1: false, skill2: false, skill3: false, tap: false };
       this.assignSpawn(p);
     }
     this.results = null;
@@ -477,6 +485,8 @@ class Round {
   movePlayer(p, dt) {
     const s = p.speedNow;
     let vx = p.input.dx, vy = p.input.dy;
+    // Freeze mengunci gerak pemakainya sendiri selama CFG.freezeRoot (tradeoff desain).
+    if (this.t < p.rootUntil) { vx = 0; vy = 0; }
     const mag = Math.hypot(vx, vy);
     if (mag > 1) { vx /= mag; vy /= mag; }
     // Pushback (PlayerController.ApplyPushback coroutine) memakai jaraknya sendiri,
@@ -521,13 +531,61 @@ class Round {
     this.emit({ type: 'camo', id: p.id, rgb: p.camoTarget, cd: CFG.hiderCd });
     return true;
   }
-  usePropSwap(p) {
+  /**
+   * Kandidat prop di sekitar pemain (blueprint 3.2: tombol Prop = tahan -> seret -> lepas).
+   * Hanya prop yang BENAR-BENAR ada di dekatnya yang boleh dipilih, supaya mode aim tidak
+   * berubah jadi "pilih sprite apa saja dari menu".
+   * @returns {Array<{name:string, wx:number, wy:number, def:object}>} tanpa duplikat nama
+   */
+  propCandidates(p, radius) {
+    const rad = radius === undefined ? CFG.propAimRadius : radius;
+    const out = [];
+    if (!p || !this.map || !this.map.props) return out;
+    for (const pr of this.map.props) {
+      if (!pr || !pr.def) continue;
+      if (dist(p.x, p.y, pr.wx, pr.wy) > rad) continue;
+      if (!out.some(c => c.name === pr.def.name)) out.push({ name: pr.def.name, wx: pr.wx, wy: pr.wy, def: pr.def });
+    }
+    return out;
+  }
+  /**
+   * PROP SWAP. `wantName` terisi = mode aim (prop yang dipilih; harus juga ada dalam
+   * radius pemain). Kosong / tidak valid = perilaku lama: prop acak yang ada di peta.
+   */
+  usePropSwap(p, wantName) {
     if (!p.isHider || this.t < p.cdHider || p.ghost) return false;
     p.cdHider = this.t + CFG.hiderCd;
-    p.propDef = pick(PROPS);
+    let def = null, aimed = false;
+    if (wantName) {
+      const cand = this.propCandidates(p).find(c => c.name === wantName);
+      if (cand) { def = cand.def; aimed = true; }
+    }
+    if (!def) { const any = this.propCandidates(p, 1e6); def = any.length ? pick(any).def : pick(PROPS); }
+    p.propDef = def;
     p.propUntil = this.t + CFG.propSwapTime;
     p.camoTarget = null; p.camoRgb = null;
-    this.emit({ type: 'prop', id: p.id, prop: p.propDef.name, dur: CFG.propSwapTime });
+    this.emit({ type: 'prop', id: p.id, prop: p.propDef.name, dur: CFG.propSwapTime, aimed });
+    return true;
+  }
+  /**
+   * FREEZE (skill #3 Hider): memperlambat semua Seeker dalam radius + mengunci gerak
+   * pemakainya sebentar. Padanan C#: HiderSkill.CastFreeze -> EvtSlow (Net.SyncSlow).
+   * Cooldown sendiri (CFG.freezeCd) supaya tidak merebut slot Camo/Prop.
+   */
+  useFreeze(p) {
+    if (!p || !p.isHider || p.ghost || this.t < p.cdFreeze) return false;
+    p.cdFreeze = this.t + CFG.freezeCd;
+    p.rootUntil = this.t + CFG.freezeRoot;
+    const hits = [];
+    for (const q of this.players.values()) {
+      if (q.isHider) continue;                                    // hanya Seeker yang ikut membeku
+      if (q.ghost && q.isHider) continue;                          // (hantu hider tidak relevan)
+      if (dist(p.x, p.y, q.x, q.y) > CFG.freezeRadius) continue;
+      q.slowUntil = this.t + CFG.freezeTime;
+      q.slowFactor = Math.min(q.slowFactor, CFG.freezeSlow);       // jangan menimpa slow yang lebih kuat
+      hits.push(q.id);
+    }
+    this.emit({ type: 'freeze', id: p.id, x: p.x, y: p.y, r: CFG.freezeRadius, hits, dur: CFG.freezeTime });
     return true;
   }
   useRadar(p) {
@@ -706,12 +764,14 @@ class Round {
             p.input.dy = Math.sign(p.y - seeker.y) || (Math.random() < .5 ? 1 : -1);
             if (sd < 2.6 && Math.random() < 0.06) p.input.skill2 = true;   // sembunyi jadi prop
             if (Math.random() < 0.03) p.input.skill1 = true;
+            // mepet sekali -> bekukan Seeker (skill #3, cooldown sendiri)
+            if (sd < 3.2 && this.t >= p.cdFreeze && Math.random() < 0.05) p.input.skill3 = true;
           } else if (sd < 6 && p.propDef === null && Math.random() < 0.01) { p.input.skill1 = true; p.input.dx = p.input.dy = 0; }
           else { p.input.dx = p.input.dy = 0; if (Math.random() < 0.004) { b.goal = this.pickHidingSpot(p); } else if (b.goal && Math.random() < 0.02) { p.input.dx = Math.sign(b.goal[0] - p.x) * .6; p.input.dy = Math.sign(b.goal[1] - p.y) * .6; } }
         } else { p.input.dx = p.input.dy = 0; }
       } else {                                   // seeker bot: dekati hider terdekat
         const t = this.livingHiders().sort((a, c) => dist(a.x, a.y, p.x, p.y) - dist(c.x, c.y, p.x, p.y))[0];
-        p.input.skill1 = p.input.skill2 = p.input.tap = false;
+        p.input.skill1 = p.input.skill2 = p.input.skill3 = p.input.tap = false;
         if (!t) { p.input.dx = p.input.dy = 0; continue; }
         const d = dist(t.x, t.y, p.x, p.y);
         let ax = (t.x - p.x) / (d || 1), ay = (t.y - p.y) / (d || 1);
@@ -748,9 +808,14 @@ class Round {
     this.tickPhase();
   }
   consumeSkills(p) {
-    if (p.ghost && p.isHider) { p.input.skill1 = p.input.skill2 = false; return; }
+    if (p.ghost && p.isHider) { p.input.skill1 = p.input.skill2 = p.input.skill3 = false; return; }
     if (p.input.skill1) { p.input.skill1 = false; if (p.isHider) this.useCamouflage(p); else this.useRadar(p); }
-    if (p.input.skill2) { p.input.skill2 = false; if (p.isHider) this.usePropSwap(p); else this.useSonicBlast(p); }
+    if (p.input.skill2) {
+      p.input.skill2 = false;
+      if (p.isHider) { const nm = p.pendingPropName; p.pendingPropName = null; this.usePropSwap(p, nm); }
+      else this.useSonicBlast(p);
+    }
+    if (p.input.skill3) { p.input.skill3 = false; if (p.isHider) this.useFreeze(p); }
     if (p.input.tap) { p.input.tap = false; if (!p.isHider) this.tryCatch(p, p.x, p.y); }
   }
   me() { return this.myId ? this.players.get(this.myId) : null; }
@@ -884,6 +949,9 @@ if (typeof document !== 'undefined') (function boot() {
   const cv = $('game'), ctx = cv.getContext('2d');
   const mm = $('minimap'), mg = mm.getContext('2d');
   let ROUND = null, map = null, DPR = 1, cssW = 0, cssH = 0, scale = 40, ox = 0, oy = 0;
+  let fitScale = 40, cam = null;                // kamera (follow+zoom); fitScale = skala "seluruh peta"
+  /* Mode aim utk skill Prop (blueprint 3.2: tahan -> seret -> lepas). */
+  const aim = { on: false, id: null, wx: 0, wy: 0, t0: 0, moved: false, pick: null };
   let netMode = 'solo', net = null, started = false;
 
   function resize() {
@@ -891,8 +959,8 @@ if (typeof document !== 'undefined') (function boot() {
     cssW = cv.clientWidth; cssH = cv.clientHeight;
     cv.width = Math.round(cssW * DPR); cv.height = Math.round(cssH * DPR);
     if (!map) return;
-    scale = Math.min(cssW / (map.cols + 1), cssH / (map.rows + 1)) * DPR;
-    ox = cssW * DPR / 2; oy = cssH * DPR / 2;
+    fitScale = Math.min(cssW / (map.cols + 1), cssH / (map.rows + 1)) * DPR;
+    applyCam();                                 // scale/ox/oy = f(fitScale, kamera)
     mm.width = mm.clientWidth * DPR; mm.height = mm.clientHeight * DPR;
   }
   addEventListener('resize', resize);
@@ -957,6 +1025,97 @@ if (typeof document !== 'undefined') (function boot() {
     parts.emit('dust', p.x, p.y - 0.4, { count: 3, dir: Math.PI, spread: 0.5, speed: 0.45 + p.speedNow * 0.12 });
   }
   if (UI && UI.Viewport) UI.Viewport.init();
+
+  /* ---------- kamera: padanan web dari Utils/PlayerCamera.cs ----------
+     zoom 1.0 = seluruh peta terlihat -> zoom > 1 hanya MEMOTONG peta, jadi tidak
+     pernah ada tepi hitam. Diam = dekat (camIdle), lari = melebar (camRun),
+     fase SEEK = paling lebar (camSeek). Matikan dengan ?cam=0. */
+  cam = UI && UI.Camera ? new UI.Camera({
+    enabled: queryFlag('cam') !== '0',
+    zoomIdle: CFG.camIdle, zoomRun: CFG.camRun, zoomSeek: CFG.camSeek,
+    runSpeed: CFG.camRunSpeed, smooth: CFG.camSmooth,
+  }) : null;
+  /** Ukuran view dalam unit dunia (dipakai clamp kamera). */
+  function camViewUnits() {
+    const z = cam ? Math.max(0.2, cam.zoom) : 1;
+    return { w: (cssW * DPR) / (fitScale * z), h: (cssH * DPR) / (fitScale * z) };
+  }
+  /** Tulis hasil kamera ke variabel proyeksi (W2SX/SX2W & FX memakai ini). */
+  function applyCam() {
+    if (!map) return;
+    if (!cam) { scale = fitScale; ox = cssW * DPR / 2; oy = cssH * DPR / 2; return; }
+    const a = cam.apply(fitScale, cssW * DPR, cssH * DPR);
+    scale = a.scale; ox = a.ox; oy = a.oy;
+  }
+  /** Satu langkah follow+zoom per frame (dibekukan saat pause agar tidak melayang). */
+  /* ---------- mode aim utk skill Prop (blueprint 3.2: tahan -> seret -> lepas) ----------
+     Lepas tanpa seret = perilaku lama (prop acak terdekat). Menyeret lalu melepas di atas
+     sebuah prop di dalam CFG.propAimRadius = menukar wujud ke prop ITU. Hanya visual & pilihan target;
+     aturan swap tetap di Round.usePropSwap supaya Host-authoritative tetap berlaku. */
+  const AIM_MOVE_PX = 10;                    // jarak seret minimum supaya dianggap "memilih" (bukan tap)
+  function aimBtnEl() {
+    const box = $('skills'), kids = box && box.children;
+    if (!kids) return null;
+    for (let i = 0; i < kids.length; i++) { const el = kids[i]; if (el && el.dataset && el.dataset.field === 'skill2') return el; }
+    return null;
+  }
+  /** Kandidat terdekat dari titik seret; tetap harus berada dalam radius pemain. */
+  function aimPickName(wx, wy) {
+    const p = ROUND ? ROUND.me() : null;
+    if (!p) return null;
+    const list = ROUND.propCandidates(p);
+    if (!list.length) return null;
+    let best = null, bd = 1e9;
+    for (const c of list) { const d = dist(c.wx, c.wy, wx, wy); if (d < bd) { bd = d; best = c; } }
+    return best && bd <= Math.max(0.9, CFG.propAimRadius * 0.6) ? best.name : null;
+  }
+  function aimMove(clientX, clientY) {
+    if (!aim.on) return;
+    const r = cv.getBoundingClientRect();
+    aim.wx = SX2W((clientX - r.left) * DPR); aim.wy = SY2W((clientY - r.top) * DPR);
+    if (Math.hypot(clientX - aim.x0, clientY - aim.y0) > AIM_MOVE_PX) aim.moved = true;
+    aim.pick = aimPickName(aim.wx, aim.wy);
+  }
+  function aimStart(ev) {
+    const p = ROUND ? ROUND.me() : null;
+    if (!p || !p.isHider || p.ghost) return false;
+    if (ROUND.t < p.cdHider) { toast('cooldown Prop: ' + Math.max(0, p.cdHider - ROUND.t).toFixed(1) + 's'); return false; }
+    aim.on = true; aim.id = ev && ev.pointerId != null ? ev.pointerId : null;
+    aim.x0 = ev ? ev.clientX : 0; aim.y0 = ev ? ev.clientY : 0;
+    aim.t0 = performance.now(); aim.moved = false; aim.pick = null;
+    if (ev) aimMove(ev.clientX, ev.clientY);
+    sfx('aim'); haptic('skill');
+    const b = aimBtnEl(); if (b) b.className = (b.className || 'skill ready') + ' aiming';
+    setTxt('aimHint', 'seret ke prop tujuan lalu lepas — tap singkat = prop acak terdekat');
+    setCls('aimHint', 'on');
+    return true;
+  }
+  /** commit=false -> batal (pointercancel): tidak ada swap, cooldown utuh. */
+  function aimEnd(commit) {
+    if (!aim.on) return false;
+    aim.on = false;
+    const b = aimBtnEl(); if (b) b.className = (b.className || 'skill ready').replace(/\s*(aiming|picked)/g, '');
+    setCls('aimHint', '');
+    const p = ROUND ? ROUND.me() : null;
+    if (!p || !commit) return false;
+    // yang menentukan hanyalah: ada seretan DAN ada kandidat di bawah jari.
+    const chosen = aim.moved ? (aim.pick || null) : null;
+    p.pendingPropName = chosen;
+    p.input.skill2 = true;
+    if (chosen) toast('menyamar jadi ' + chosen);
+    return true;
+  }
+  function camStep(dt) {
+    if (!cam || !map) return;
+    const p = ROUND ? ROUND.me() : null;
+    const mag = p ? Math.min(1, Math.hypot(p.input.dx || 0, p.input.dy || 0)) : 0;
+    cam.step(dt, {
+      tx: p ? p.x : 0, ty: p ? p.y : 0,
+      speed: p ? mag * (p.speedNow || 0) : 0,
+      seeking: !!ROUND && ROUND.phase === 'SEEK',
+    }, camViewUnits(), { w: map.cols + 1, h: map.rows + 1 });
+    applyCam();
+  }
   function showScreen(name) { if (screens) screens.show(name); }
   /** Musik & visibilitas joystick mengikuti layar aktif. */
   function onScreenChange(next) {
@@ -981,6 +1140,7 @@ if (typeof document !== 'undefined') (function boot() {
     setCls('hud', paused ? '' : (ROUND ? 'on' : ''));
     if (AU) { paused ? AU.stopMusic() : (ROUND ? AU.music('game') : AU.music('menu')); }
     if (joy && joy.reset) joy.reset();
+    if (aim.on) aimEnd(false);                           // jangan biarkan mode aim menggantung
     return paused;
   }
 
@@ -998,6 +1158,7 @@ if (typeof document !== 'undefined') (function boot() {
     prop: e => `${name(e.id)} menyamar jadi ${e.prop}`,
     propCancel: e => `${name(e.id)} membatalkan samaran`,
     blast: e => `${name(e.id)} melepaskan Sonic Blast!`,
+    freeze: e => `${name(e.id)} membekukan sekitarnya (${(e.hits || []).length} Seeker ❄)`,
     radar: e => `${name(e.id)} memakai Radar${e.target ? ' → ' + name(e.target) : ''}`,
     slow: e => `${name(e.id)} melambat kena blast`,
     hit: e => `${name(e.by)} mengenai ${name(e.id)} (HP ${e.hp})`,
@@ -1016,7 +1177,7 @@ if (typeof document !== 'undefined') (function boot() {
     // Blueprint: 4 skill ada, tapi hanya 2 yang relevan per role (HUD minimum).
     const defs = p && !p.isHider
       ? [['Icon_Radar', 'Radar', 'Q', 'skill1'], ['Icon_SonicBlast', 'Blast', 'E', 'skill2']]
-      : [['Icon_Camouflage', 'Kamuflase', '1', 'skill1'], ['Icon_PropSwap', 'Prop', '2', 'skill2']];
+      : [['Icon_Camouflage', 'Kamuflase', '1', 'skill1'], ['Icon_PropSwap', 'Prop', '2', 'skill2'], ['Icon_Freeze', 'Bekukan', '3', 'skill3']];
     const box = $('skills');
     if (box.dataset.defs === defs.map(d => d[1]).join(',')) return;
     box.dataset.defs = defs.map(d => d[1]).join(',');
@@ -1030,12 +1191,17 @@ if (typeof document !== 'undefined') (function boot() {
       const use = () => {
         const me = ROUND.me(); if (!me || me.ghost) return;
         me.input[field] = true;
-        sfx(field === 'skill1' ? (p && !p.isHider ? 'radar' : 'camo') : (p && !p.isHider ? 'blast' : 'swap'));
+        sfx(field === 'skill1' ? (p && !p.isHider ? 'radar' : 'camo') : field === 'skill3' ? 'freeze' : (p && !p.isHider ? 'blast' : 'swap'));
         haptic('skill');
         if (UI) UI.SkillButton.pressFx(b);
         if (ROUND.phase === 'LOBBY' || ROUND.phase === 'RESULT') toast('skill aktif saat ronde berjalan');
       };
-      b.addEventListener('pointerdown', ev => { ev.preventDefault(); use(); });
+      if (field === 'skill2' && !(p && !p.isHider)) {          // Prop utk Hider = mode aim
+        b.addEventListener('pointerdown', ev => { ev.preventDefault(); if (!aimStart(ev)) use(); });
+        b.addEventListener('contextmenu', ev => ev.preventDefault());
+      } else {
+        b.addEventListener('pointerdown', ev => { ev.preventDefault(); use(); });
+      }
       box.appendChild(b);
       skillBtns.push(UI ? new UI.SkillButton(b, { cd: b.querySelector('.cd'), field }) : { el: b, cd: b.querySelector('.cd'), render() { } });
     }
@@ -1077,15 +1243,23 @@ if (typeof document !== 'undefined') (function boot() {
     $('hpFill').style.width = (want ? (hp / want) * 100 : 0) + '%';
     $('hpFill').style.background = hp > 1 ? '#46c06a' : '#ff5d5d';
     // cooldown radial (SkillButton merapikan cincin + kelas ready/cool)
-    const left = p ? Math.max(0, (p.isHider ? p.cdHider : p.cdSeeker) - ROUND.t) : 0;
-    const total = p && p.isHider ? CFG.hiderCd : CFG.seekerCd;
+    const left0 = p ? Math.max(0, (p.isHider ? p.cdHider : p.cdSeeker) - ROUND.t) : 0;
+    const total0 = p && p.isHider ? CFG.hiderCd : CFG.seekerCd;
     for (let i = 0; i < $('skills').children.length; i++) {
       const b = $('skills').children[i];
       const btn = skillBtns[i];
+      const fld = (b && b.dataset && b.dataset.field) || (btn && btn.field) || 'skill1';
+      const isAimSkill = fld === 'skill2' && p && p.isHider;
+      const left = fld === 'skill3' ? (p ? Math.max(0, p.cdFreeze - ROUND.t) : 0) : left0;
+      const total = fld === 'skill3' ? CFG.freezeCd : total0;
       if (btn && btn.render && btn.el === b) btn.render(left, total);
       else if (b && b.querySelector) {
         const cd = b.querySelector('.cd'); if (cd && cd.style) cd.style.background = SkillStyle(left, total);
         b.className = 'skill ' + (left > 0.02 ? 'cool' : 'ready');
+      }
+      if (b) {                       // kelas mode aim: ditulis ulang tiap frame supaya tidak menumpuk
+        const cn = (b.className || 'skill ready').replace(/\s*(aiming|picked)/g, '');
+        b.className = cn + (aim.on && isAimSkill ? ' aiming' : '') + (aim.on && isAimSkill && aim.pick ? ' picked' : '');
       }
     }
     /* --- konteks & feedback (blueprint 4.2) --- */
@@ -1147,6 +1321,29 @@ if (typeof document !== 'undefined') (function boot() {
       ctx.beginPath();
       ctx.arc(W2SX(b.x), W2SY(b.y), k * CFG.blastRadius * scale, 0, 7);
       ctx.stroke();
+    }
+    // mode aim Prop: garis + kandidat + radius (blueprint 3.2 "tahan -> seret -> lepas")
+    if (aim.on && ROUND) {
+      const pa = ROUND.me();
+      if (pa) {
+        ctx.save();
+        if (ctx.setLineDash) ctx.setLineDash([6 * DPR, 5 * DPR]);
+        ctx.strokeStyle = 'rgba(143,226,159,.9)'; ctx.lineWidth = 2 * DPR;
+        ctx.beginPath(); ctx.moveTo(W2SX(pa.x), W2SY(pa.y)); ctx.lineTo(W2SX(aim.wx), W2SY(aim.wy)); ctx.stroke();
+        if (ctx.setLineDash) ctx.setLineDash([]);
+        ctx.strokeStyle = 'rgba(255,255,255,.16)'; ctx.lineWidth = DPR;
+        ctx.beginPath(); ctx.arc(W2SX(pa.x), W2SY(pa.y), CFG.propAimRadius * scale, 0, 7); ctx.stroke();
+        for (const c of ROUND.propCandidates(pa)) {
+          const hot = aim.pick === c.name;
+          ctx.strokeStyle = hot ? '#ffe27a' : 'rgba(255,255,255,.5)';
+          ctx.lineWidth = (hot ? 3 : 1.5) * DPR;
+          ctx.beginPath(); ctx.arc(W2SX(c.wx), W2SY(c.wy), (hot ? 0.62 : 0.5) * scale, 0, 7); ctx.stroke();
+          ctx.font = `${(hot ? 12 : 10) * DPR}px system-ui`; ctx.textAlign = 'center';
+          ctx.fillStyle = hot ? '#ffe27a' : '#eaf3ec';
+          ctx.fillText(c.name, W2SX(c.wx), W2SY(c.wy) - 0.72 * scale);
+        }
+        ctx.restore();
+      }
     }
     // pemain (diurutkan y supaya tumpukan terlihat rapi)
     const list = [...ROUND.players.values()].sort((a, b) => a.y - b.y);
@@ -1223,6 +1420,7 @@ if (typeof document !== 'undefined') (function boot() {
     // Peta tombol (blueprint 3.3): hider 1/2, seeker Q/E — keduanya selalu diterima.
     if (k === '1' || k === 'q') press('skill1');
     if (k === '2' || k === 'e') press('skill2');
+    if (k === '3') press('skill3');                     // Freeze (Hider)
     if (k === 'm') { toggleSound(); return; }
     if (k === 'l') { toggleBoard(); return; }
     if (k === 'escape' || k === 'esc') { e.preventDefault(); setPaused(!paused); return; }
@@ -1261,6 +1459,10 @@ if (typeof document !== 'undefined') (function boot() {
   })();
 
   // klik/tap di arena → catcher (RequestCatch) untuk seeker
+  addEventListener('pointermove', e => { if (aim.on && (aim.id === null || e.pointerId === aim.id)) aimMove(e.clientX, e.clientY); }, { passive: true });
+  addEventListener('pointerup', e => { if (aim.on && (aim.id === null || e.pointerId === aim.id)) aimEnd(true); }, { passive: true });
+  addEventListener('pointercancel', () => { if (aim.on) aimEnd(false); });
+
   cv.addEventListener('pointerdown', e => {
     const p = ROUND.me(); if (!p) return;
     const r = cv.getBoundingClientRect();
@@ -1304,6 +1506,9 @@ if (typeof document !== 'undefined') (function boot() {
       get screens() { return screens; }, get fx() { return fx; }, get UI() { return UI; }, get audio() { return AU; },
       get paused() { return paused; }, setPaused, toggleSound, toggleBoard, showScreen, renderMiniBoard,
       get parts() { return parts; }, get localScores() { return localScores; }, get profile() { return profile; },
+      get cam() { return cam; }, get aim() { return aim; }, camStep, applyCam, camViewUnits,
+      get dpr() { return DPR; }, w2sx: (v) => W2SX(v), w2sy: (v) => W2SY(v),
+      get view() { return { scale, ox, oy, fitScale }; },
       shake, renderLocalBoard,
       prefs: uiPrefs, savePrefs: saveUiPrefs,
     },
@@ -1539,7 +1744,7 @@ if (typeof document !== 'undefined') (function boot() {
     if (ROUND && netMode !== 'client') { keyInput(); ROUND.step(dt); }
     else if (ROUND) { keyInput(); ROUND.t += dt; ROUND.tickPhaseClient?.(); }
     if (parts) { parts.step(dt); dustStep(dt); }
-    if (ROUND) { buildSkills(); hud(); draw(); }
+    if (ROUND) { buildSkills(); hud(); if (!paused) camStep(dt); draw(); }
     requestAnimationFrame(frame);
   }
 
@@ -1608,6 +1813,15 @@ if (typeof document !== 'undefined') (function boot() {
           if (fx && at) fx.damage(at.x, at.y, '-1 ♥', '');
           if (at && parts) parts.emit('hit', at.x, at.y, { count: e.id === ROUND.myId ? 16 : 10 });
           if (e.id === ROUND.myId) { if (fx) fx.flash($('stage'), 'hit'); shake(2); }
+          break;
+        case 'freeze':
+          sfx('freeze'); haptic('skill');
+          if (fx) fx.damage(e.x || 0, e.y || 0, '❄ ' + (e.dur || CFG.freezeTime) + 's', 'info');
+          if (parts) {
+            parts.emit('ring', e.x || 0, e.y || 0, { r1: e.r || CFG.freezeRadius, color: 'rgba(150,225,255,A)' });
+            parts.emit('spark', e.x || 0, e.y || 0, { count: 14, color: 'rgba(190,240,255,A)' });
+          }
+          if (e.id === ROUND.myId && fx) fx.flash($('stage'), 'camo');
           break;
         case 'blast':
           sfx('blast'); haptic('hit');
@@ -1765,8 +1979,8 @@ if (typeof document !== 'undefined') (function boot() {
     setInterval(async () => {
       if (!net || netMode !== 'client' || !ROUND.me()) return;
       const p = ROUND.me();
-      await api('/room/send', { room: net.room, token: net.token, ev: { t: 'in', x: p.input.dx, y: p.input.dy, s1: p.input.skill1, s2: p.input.skill2, tap: p.input.tap } }).catch(() => {});
-      p.input.skill1 = p.input.skill2 = p.input.tap = false;
+      await api('/room/send', { room: net.room, token: net.token, ev: { t: 'in', x: p.input.dx, y: p.input.dy, s1: p.input.skill1, s2: p.input.skill2, s3: p.input.skill3, tap: p.input.tap, pn: p.pendingPropName || null } }).catch(() => {});
+      p.input.skill1 = p.input.skill2 = p.input.skill3 = p.input.tap = false; p.pendingPropName = null;
     }, Math.max(CFG.minSendRate, 0.08) * 1000);
   }
   async function poll() {
@@ -1780,7 +1994,7 @@ if (typeof document !== 'undefined') (function boot() {
         if (ev.t === 'snap' && netMode === 'client') ROUND.applySnapshot(ev.s);
         else if (ev.t === 'in' && netMode === 'host') {
           const p = ROUND.players.get(ev.from);
-          if (p) { p.input.dx = ev.x; p.input.dy = ev.y; if (ev.s1) p.input.skill1 = true; if (ev.s2) p.input.skill2 = true; if (ev.tap) p.input.tap = true; }
+          if (p) { p.input.dx = ev.x; p.input.dy = ev.y; if (ev.s1) p.input.skill1 = true; if (ev.s2) p.input.skill2 = true; if (ev.s3) p.input.skill3 = true; if (ev.tap) p.input.tap = true; if (ev.pn) p.pendingPropName = ev.pn; }
         }
         else if (ev.t === 'catch' && netMode === 'host') {
           const p = ROUND.players.get(ev.from); if (p) ROUND.tryCatch(p, ev.x, ev.y);

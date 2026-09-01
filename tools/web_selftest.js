@@ -86,9 +86,35 @@ const until = (r, pred, dt = 1 / 60, maxSec = 200) => {
     ['frenzySpeed', /FrenzySpeedMultiplier\s*=\s*([\d.]+)f/, CFG.frenzySpeed],
     ['frenzyRange', /FrenzyCatchRangeBonus\s*=\s*([\d.]+)f/, CFG.frenzyRange],
     ['adGap', /AdMinGapSeconds\s*=\s*([\d.]+)f/, CFG.adGap],
+    ['freezeRadius', /FreezeRadius\s*=\s*([\d.]+)f/, CFG.freezeRadius],
+    ['freezeTime', /FreezeDuration\s*=\s*([\d.]+)f/, CFG.freezeTime],
+    ['freezeSlow', /FreezeSlowFactor\s*=\s*([\d.]+)f/, CFG.freezeSlow],
+    ['freezeCd', /FreezeCooldown\s*=\s*([\d.]+)f/, CFG.freezeCd],
+    ['freezeRoot', /FreezeSelfRoot\s*=\s*([\d.]+)f/, CFG.freezeRoot],
+    ['propAimRadius', /PropAimPickRadius\s*=\s*([\d.]+)f/, CFG.propAimRadius],
+    ['camIdle', /CamIdleZoom\s*=\s*([\d.]+)f/, CFG.camIdle],
+    ['camRun', /CamRunZoom\s*=\s*([\d.]+)f/, CFG.camRun],
+    ['camSeek', /CamSeekZoom\s*=\s*([\d.]+)f/, CFG.camSeek],
+    ['camRunSpeed', /CamRunSpeed\s*=\s*([\d.]+)f/, CFG.camRunSpeed],
+    ['camSmooth', /CamSmoothTime\s*=\s*([\d.]+)f/, CFG.camSmooth],
   ];
   for (const [k, re, want] of PARITY) ok(`CFG.${k} = ${want}`, near(cnum(re), want, 1e-9), { csharp: cnum(re) });
   ok('blastRadiusSqr == radius²', near(CFG.blastRadiusSqr, CFG.blastRadius * CFG.blastRadius), CFG.blastRadiusSqr);
+  {
+    const hs = rd('Assets/Scripts/Skills/HiderSkill.cs'), pc = rd('Assets/Scripts/Players/PlayerController.cs');
+    const cam = rd('Assets/Scripts/Utils/PlayerCamera.cs'), um = rd('Assets/Scripts/UI/UIManager.cs');
+    ok('C# HiderSkill: SlotFreeze=2 + cooldown sendiri + CastPropSwap(propId) utk aim',
+      /SlotFreeze = 2/.test(hs) && /FreezeCooldownRemaining/.test(hs) && /CastPropSwap\(byte propId = 0\)/.test(hs), '');
+    ok('C# PlayerController: EvtFreeze -> slow hanya utk Seeker dalam radius',
+      /EvtFreeze/.test(pc) && /ApplySpeedSlow\(ff, fd\)/.test(pc) && /Role != GameRole\.Seeker/.test(pc), '');
+    ok('C# PlayerCamera: zoom ikut konstanta Cam* (satu sumber angka dgn web)',
+      /CamSeekZoom/.test(cam) && /CamRunZoom/.test(cam) && /MoveInput\.sqrMagnitude/.test(cam), '');
+    ok('C# UIManager: 3 slot skill default + slot ke-3 khusus Hider',
+      /hiderLabel = "Bekukan"/.test(um) && /freezeSlot/.test(um), '');
+    ok('web skill3 -> useFreeze (sisi aturan) + net s3/pn (sisi protocol)',
+      /useFreeze\(p\)/.test(rd('web/game.js')) && /s3: p\.input\.skill3/.test(rd('web/game.js'))
+      && /pn: p\.pendingPropName/.test(rd('web/game.js')), '');
+  }
   ok('adSimSeconds == AdsManager.simulatedAdSeconds',
     near(CFG.adSimSeconds, parseFloat(rd('Assets/Scripts/Monetization/AdsManager.cs').match(/simulatedAdSeconds\s*=\s*([\d.]+)f/)[1])), CFG.adSimSeconds);
   ok('skor: seeker catches*30 / hider detik + hp*10 (GameManager)',
@@ -494,6 +520,113 @@ const until = (r, pred, dt = 1 / 60, maxSec = 200) => {
       [...r.players.values()].every(p => p.ghost || !map.solid(p.x, p.y, 0.02)), 
       [...r.players.values()].filter(p => !p.ghost && map.solid(p.x, p.y, 0.02)).map(p => [p.name, sec(p.x), sec(p.y)]));
     console.log(`       (info) ronde=${r.roundIndex} hit=${hits} maxCatches=${maxCatches} ghost=${[...r.players.values()].filter(p => p.ghost).length}`);
+  }
+
+  /* ========== [16] FREEZE, AIM PROP & HUD v2 (paritas C# <-> web) =========== */
+  console.log('\n[16] Freeze + aim Prop + HUD v2 (parity C# <-> web)');
+  {
+    const fsx = require('fs');
+    const rd2 = f => fsx.readFileSync(path.join(ROOT, f), 'utf8');
+    const hs = rd2('Assets/Scripts/Skills/HiderSkill.cs');
+    const pc = rd2('Assets/Scripts/Players/PlayerController.cs');
+    const pcom = rd2('Assets/Scripts/Players/PlayerCombat.cs');
+    const um = rd2('Assets/Scripts/UI/UIManager.cs');
+    const tool = rd2('Assets/Scripts/Editor/HideSeekSetupTool.cs');
+    const art = rd2('Assets/Scripts/Editor/HideSeekArtInstaller.cs');
+    const joy = rd2('Assets/Scripts/UI/MobileJoystick.cs');
+    const cam = rd2('Assets/Scripts/Utils/PlayerCamera.cs');
+    const hudDir = 'Assets/Scripts/UI/Hud/';
+    const hudFiles = ['HudV2Theme.cs', 'HudSafeArea.cs', 'HudV2SkillButton.cs', 'HudV2DamageText.cs', 'HudV2LocalBoard.cs', 'HudV2Settings.cs'];
+    const hud = f => rd2(hudDir + f);
+
+    /* --- aturan web: Freeze bekerja seperti di C# (slow seeker, root caster, cd sendiri) --- */
+    const r = new Round();
+    const h = new PlayerState(1, 'H', 0), s1 = new PlayerState(2, 'A', 1), s2 = new PlayerState(3, 'B', 1);
+    r.add(h); r.add(s1); r.add(s2); r.start(false);
+    r.phase = 'HIDE'; r.phaseEnd = r.t + 60; r.myId = 1;
+    [h, s1, s2].forEach(p => { p.isBot = false; p.ghost = false; });
+    h.role = 0; s1.role = 1; s2.role = 1; r.seekerId = s1.id;
+    h.x = 0; h.y = 0; s1.x = 2; s1.y = 1; s2.x = 20; s2.y = 20;
+    h.cdFreeze = 0;
+    const fired = r.useFreeze(h);
+    ok('web useFreeze: semua Seeker dalam radius melambat (bukan hanya 1)',
+      fired && s1.slowUntil > r.t && s1.slowFactor === CFG.freezeSlow, [s1.slowUntil.toFixed(2), s1.slowFactor]);
+    ok('web useFreeze: Seeker di luar radius tidak terpengaruh', s2.slowUntil === 0, s2.slowUntil);
+    ok('web useFreeze: pemakai terpaku + cooldown sendiri', h.rootUntil > r.t && h.cdFreeze > r.t, [h.rootUntil.toFixed(2), h.cdFreeze.toFixed(2)]);
+    ok('web: root memang memblokir gerak (v=0) sampai rootUntil', (() => {
+      h.input.dx = 1; h.x = 0; const dt = 0.05;
+      h.rootUntil = r.t + 1; r.movePlayer(h, dt); const frozen = h.x === 0;
+      h.rootUntil = 0; r.movePlayer(h, dt);
+      return frozen && h.x !== 0;
+    })(), 'root');
+
+    /* --- paritas C# untuk skill yang sama --- */
+    ok('C# HiderSkill: slot 2 = Bekukan (SlotFreeze) + timer sendiri (freezeCooldownUntil)',
+      /SlotFreeze = 2/.test(hs) && /freezeCooldownUntil/.test(hs) && /StartFreezeCooldown/.test(hs), '');
+    ok('C# HiderSkill: broadcast pulsa EvtFreeze (RELIABLE) + root diri via FreezeForProp',
+      /Net\.RaiseAll\(HideSeekConstants\.EvtFreeze, content, true\)/.test(hs) && /controller\.FreezeForProp\(true\)/.test(hs), '');
+    ok('C# PlayerController: hanya Seeker dalam radius yang kena slow (cermin useFreeze)',
+      /Role != GameRole\.Seeker \|\| IsGhost/.test(pc) && /sqrMagnitude > fr \* fr/.test(pc), '');
+    ok('C# HiderSkill.SkipCooldown paham slot Freeze (reward iklan tetap works)',
+      /if \(slot == SlotFreeze\) freezeCooldownUntil = 0f;/.test(hs), '');
+    ok('C# ResetForRound membersihkan cd Freeze + root (tidak bocor antar ronde)',
+      /freezeCooldownUntil = 0f;[\s\S]{0,200}FreezeForProp\(false\)/.test(hs), '');
+
+    /* --- aim Prop: UI -> aturan --- */
+    ok('C# HiderSkill: CastPropSwap(propId) + GetPropChoices untuk picker UI',
+      /private bool CastPropSwap\(byte propId = 0\)/.test(hs) && /GetPropChoices\(int max = 8\)/.test(hs), '');
+    ok('C# UIManager: UseSkill(slot, propId) sebagai satu-satunya routing (OnSkillClicked delegasi)',
+      /public void UseSkill\(int slot, byte propId = 0\)/.test(um) && /UseSkill\(slot, 0\);/.test(um), '');
+    ok('web: tombol Prop menahan->seret->melepas mengirim pendingPropName ke usePropSwap',
+      /p\.pendingPropName = chosen;/.test(rd2('web/game.js')) && /this\.usePropSwap\(p, nm\)/.test(rd2('web/game.js')), '');
+    ok('web: protokol net ikut membawa nama prop (pn) & skill3 (s3) - Host tetap authoritative',
+      /pn: p\.pendingPropName \|\| null/.test(rd2('web/game.js')) && /if \(ev\.pn\) p\.pendingPropName = ev\.pn;/.test(rd2('web/game.js')), '');
+
+    /* --- kamera: satu sumber angka, dua implementasi --- */
+    ok('C# PlayerCamera: rasio zoom dari konstanta Cam* + ambang lari (parity uiKit.Camera2D)',
+      /Ratio\(HideSeekConstants\.CamSeekZoom\)/.test(cam) && /Ratio\(HideSeekConstants\.CamRunZoom\)/.test(cam)
+      && /MoveInput\.sqrMagnitude/.test(cam), '');
+    ok('C# PlayerCamera: follow tetap SmoothDamp dengan smoothTime (web: camSmooth)',
+      /Vector3\.SmoothDamp\(transform\.position, dest, ref velocity, Mathf\.Max\(0\.01f, smoothTime\)\)/.test(cam), '');
+    ok('web uiKit.Camera2D clamp ke tepi peta (tidak ada letterbox hitam)',
+      /static clampToMap\(/.test(rd2('web/uiKit.js')) && /halfMapW/.test(rd2('web/uiKit.js')), '');
+
+    /* --- HUD v2 (Phase 2 blueprint) --- */
+    for (const f of hudFiles) ok('HUD v2 ada: ' + f, fsx.existsSync(path.join(ROOT, hudDir + f)), f);
+    ok('HUD v2: 1 warna = 1 makna didefinisikan sekali di HudV2Theme',
+      /Hider = new Color32\(56, 224, 138, 255\)/.test(hud('HudV2Theme.cs'))
+      && /Seeker = new Color32\(255, 92, 92, 255\)/.test(hud('HudV2Theme.cs'))
+      && /TimerDangerAt = 5f/.test(hud('HudV2Theme.cs')) && /TimerWarnAt = 10f/.test(hud('HudV2Theme.cs')), '');
+    ok('HUD v2: target sentuh minimum 44px (blueprint) dipakai di tema & item popup',
+      /MinTouch = 44/.test(hud('HudV2Theme.cs')) && /HudV2Theme\.MinTouch/.test(hud('HudV2SkillButton.cs')), '');
+    ok('HUD v2: MM:SS + 3 state timer dipakai UIManager (bukan format lama hardcoded)',
+      /HudV2Theme\.Clock\(gm\.StateRemaining\)/.test(um) && /HudV2Theme\.TimerColor/.test(um) && /TimerPulse/.test(um), '');
+    ok('HUD v2: skill button punya mode aim + ring radial + haptic',
+      /public bool propAimMode = true/.test(hud('HudV2SkillButton.cs'))
+      && /Image\.Type\.Filled/.test(hud('HudV2SkillButton.cs')) && /Handheld\.Vibrate/.test(hud('HudV2SkillButton.cs')), '');
+    ok('HUD v2: ikon ditukar per role (Radar/Blast utk Seeker) seperti web',
+      /seekerIcon/.test(hud('HudV2SkillButton.cs')) && /Icon_Freeze/.test(art) && /Icons\/Icon_Radar/.test(art), '');
+    ok('HUD v2: damage number di-panel dari PlayerCombat (satu jalur, aman bila HUD absen)',
+      /HudV2DamageText\.Available/.test(pcom) && /HudV2DamageText\.Spawn\(/.test(pcom)
+      && /RpcApplyDamage/.test(pcom), '');
+    ok('HUD v2: sensitivitas tuas 0.7-1.5 (sama seperti web) + clamp sebelum dipakai',
+      /MinSens = 0.7f/.test(hud('HudV2Settings.cs')) && /MaxSens = 1.5f/.test(hud('HudV2Settings.cs'))
+      && /Mathf\.Clamp\(sensitivity, 0\.5f, 2f\)/.test(joy) && /Range\(0\.5f, 2f\)\] public float sensitivity/.test(joy), '');
+    ok('HUD v2: preferensi disimpan di kunci "hideseek_ui" (parity localStorage web)',
+      /hideseek_ui/.test(hud('HudV2Settings.cs')) && /hideseek_ui/.test(rd2('web/game.js')), '');
+    ok('HUD v2: rekor lokal top-10 kosmetik (PlayerPrefs), key "hideseek_scores_unity"',
+      /Capacity = 10/.test(hud('HudV2LocalBoard.cs')) && /hideseek_scores_unity/.test(hud('HudV2LocalBoard.cs'))
+      && /hideseek_scores/.test(rd2('web/game.js')), '');
+    ok('HUD v2: safe-area notch via Screen.safeArea + Canvas.scaleFactor',
+      /Screen\.safeArea/.test(hud('HudSafeArea.cs')) && /canvas\.scaleFactor/.test(hud('HudSafeArea.cs')), '');
+    ok('Editor: menu "6. Bangun HUD v2" ada dan idempoten (buang HUD_v2 lama dulu)',
+      /MenuItem\("HideSeek\/Setup\/6\. Bangun HUD v2/.test(tool) && /transform\.Find\("HUD_v2"\)/.test(tool), '');
+    ok('Editor: WireSkillButtons mendukung 2 ATAU 3 slot (scene lama tidak rusak)',
+      /int n = btns != null \? btns\.Length : 0;/.test(tool), '');
+    ok('Aset: Icon_Freeze.png ada di web/assets & Assets/Art (dan tercatat di manifest)',
+      fsx.existsSync(path.join(ROOT, 'web/assets/Icon_Freeze.png'))
+      && fsx.existsSync(path.join(ROOT, 'Assets/Art/HideSeek/Icons/Icon_Freeze.png'))
+      && /Icon_Freeze\s+112x112/.test(rd2('Assets/Art/HideSeek/manifest.txt')), '');
   }
 
   console.log(`\n=== web_selftest: ${pass} PASS, ${fail} FAIL ===`);

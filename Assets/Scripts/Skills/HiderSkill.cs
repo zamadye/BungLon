@@ -22,7 +22,6 @@ using UnityEngine;
 namespace HideSeek.Skills
 {
     [RequireComponent(typeof(PlayerController))]
-    [RequireComponent(typeof(PlayerController))]
     [RequireComponent(typeof(CamouflageHelper))]
     [RequireComponent(typeof(PlayerVisual))]
     public class HiderSkill : MonoBehaviourPunCallbacks, IOnEventCallback
@@ -59,7 +58,12 @@ namespace HideSeek.Skills
         public float CooldownRemaining { get { return Mathf.Max(0f, cooldownUntil - Time.time); } }
         public bool IsReady { get { return CooldownRemaining <= 0f; } }
 
+        /// <summary>Cooldown FREEZE terpisah: Bekukan tidak boleh merebut slot Kamuflase/Prop.</summary>
+        public float FreezeCooldownRemaining { get { return Mathf.Max(0f, freezeCooldownUntil - Time.time); } }
+        public bool FreezeReady { get { return FreezeCooldownRemaining <= 0f; } }
+
         private float cooldownUntil;
+        private float freezeCooldownUntil;
         private bool camoActive;
         private Color camoTarget = Color.white;
         private bool inPropMode;
@@ -74,6 +78,7 @@ namespace HideSeek.Skills
 
         private const byte SlotCamo = 0;
         private const byte SlotProp = 1;
+        private const byte SlotFreeze = 2;
 
         // ============================== LIFECYCLE ================================
         private void Awake()
@@ -111,8 +116,12 @@ namespace HideSeek.Skills
 
         // ============================= PUBLIC API ==============================
 
-        /// <summary>Tombol skill UI memanggil ini. 0 = Match Color, 1 = Prop Swap.</summary>
-        public void TryUseSkill(int slot)
+        /// <summary>
+        /// Tombol skill UI memanggil ini. 0 = Match Color, 1 = Prop Swap, 2 = Freeze (Bekukan).
+        /// propId (khusus slot 1) = wujud yang DIPILIH UI lewat mode "tahan -> seret -> lepas";
+        /// 0 berarti biarkan game memilih (perilaku lama: acak) - pemanggil lama tidak berubah.
+        /// </summary>
+        public void TryUseSkill(int slot, byte propId = 0)
         {
             if (pv == null || !pv.IsOwner) return;
             if (controller == null || controller.Role != GameRole.Hider) return;
@@ -124,21 +133,57 @@ namespace HideSeek.Skills
                 Toast("Skill belum bisa dipakai pada fase ini.");
                 return;
             }
-            if (!IsReady)
+            if (slot == SlotFreeze)
+            {
+                if (!FreezeReady)
+                {
+                    Toast("Cooldown Bekukan: " + FreezeCooldownRemaining.ToString("0.0") + "s");
+                    return;
+                }
+            }
+            else if (!IsReady)
             {
                 Toast("Cooldown: " + CooldownRemaining.ToString("0.0") + "s");
                 return;
             }
             if (props == null) props = PropDatabase.LoadDefault();
 
-            bool used = slot == SlotCamo ? CastMatchColor() : CastPropSwap();
-            if (used) StartCooldown((byte)slot);
+            bool used = slot == SlotCamo ? CastMatchColor()
+                        : slot == SlotProp ? CastPropSwap(propId)
+                        : slot == SlotFreeze ? CastFreeze()
+                        : false;
+            if (used)
+            {
+                if (slot == SlotFreeze) StartFreezeCooldown();
+                else StartCooldown((byte)slot);
+            }
+        }
+
+        /// <summary>
+        /// Kandidat wujud untuk UI picker (maks. <paramref name="max"/> entri, urutan database).
+        /// Web menampilkan lingkaran kandidat di sekitar pemain (prop nyata di peta); di Unity
+        /// prop hanya prefab disguise, jadi picker menampilkan daftar database yang prefabs-nya ada.
+        /// </summary>
+        public System.Collections.Generic.List<PropDatabase.PropEntry> GetPropChoices(int max = 8)
+        {
+            var list = new System.Collections.Generic.List<PropDatabase.PropEntry>();
+            if (props == null) props = PropDatabase.LoadDefault();
+            if (props == null || props.props == null) return list;
+            for (int i = 0; i < props.props.Length && list.Count < Mathf.Max(1, max); i++)
+            {
+                var e = props.props[i];
+                if (e != null && e.ResolvePrefab() != null) list.Add(e);
+            }
+            return list;
         }
 
         /// <summary>Bersihkan efek saat ronde baru (dipanggil PlayerController.ResetForRound).</summary>
         public void ResetForRound()
         {
             cooldownUntil = 0f;
+            freezeCooldownUntil = 0f;
+            if (rootRoutine != null) { StopCoroutine(rootRoutine); rootRoutine = null; }
+            if (controller != null) controller.FreezeForProp(false);
             camoActive = false;
             if (propRoutine != null) { StopCoroutine(propRoutine); propRoutine = null; }
             DestroyPropInstance();
@@ -219,13 +264,17 @@ namespace HideSeek.Skills
         /// <summary>
         /// PROP SWAP: ganti model dengan prop acak selama propDuration detik.
         /// Semua klien instantiate prop yang sama (ID dikirim lewat RPC) agar visual konsisten.
+        /// propId != 0 = prop HASIL PILIHAN UI (mode aim "tahan -> seret -> lepas"; paritas web
+        /// Round.usePropSwap(p, wantName)).
         /// </summary>
-        private bool CastPropSwap()
+        private bool CastPropSwap(byte propId = 0)
         {
             if (inPropMode) { EndPropMode(true); return false; }      // tekan lagi = keluar (tanpa cooldown)
             if (props == null || props.Count == 0) { Toast("PropDatabase kosong."); return false; }
 
-            PropDatabase.PropEntry entry = props.Pick(unchecked(MyActor() * 977 + Time.frameCount));
+            PropDatabase.PropEntry entry = propId != 0 ? props.Get(propId) : null;
+            if (propId != 0 && entry == null) { Toast("Prop terpilih tidak ada di database."); return false; }
+            if (entry == null) entry = props.Pick(unchecked(MyActor() * 977 + Time.frameCount));
             if (entry == null) { Toast("Prop tidak tersedia."); return false; }
 
             float dur = propDurationOverride > 0f ? propDurationOverride : props.SwapDuration;
@@ -318,7 +367,8 @@ namespace HideSeek.Skills
         /// </summary>
         public void SkipCooldown(byte slot)
         {
-            cooldownUntil = 0f;
+            if (slot == SlotFreeze) freezeCooldownUntil = 0f;
+            else cooldownUntil = 0f;
             Net.SyncCooldown(MyActor(), slot, 0f);
         }
 
@@ -327,6 +377,50 @@ namespace HideSeek.Skills
         {
             cooldownUntil = Time.time + Mathf.Max(0.1f, cooldown);
             Net.SyncCooldown(MyActor(), slot, cooldown);
+        }
+
+        /// <summary>Cooldown FREEZE (slot 2) memakai timer sendiri, tetap diumumkan ke room.</summary>
+        private void StartFreezeCooldown()
+        {
+            float cd = Mathf.Max(0.1f, HideSeekConstants.FreezeCooldown);
+            freezeCooldownUntil = Time.time + cd;
+            Net.SyncCooldown(MyActor(), SlotFreeze, cd);
+        }
+
+        // ============================ SKILL #3 - BEKUKAN =======================
+
+        private Coroutine rootRoutine;
+
+        /// <summary>
+        /// BEKUKAN: broadcast pulsa area (event RELIABLE) lalu kunci gerak diri sendiri sebentar.
+        /// Setiap klien korban menerapkan slow-nya sendiri (PlayerController.OnEvent/EvtFreeze),
+        /// jadi tidak ada RPC lintas owner. Paritas aturan: web Round.useFreeze().
+        /// </summary>
+        private bool CastFreeze()
+        {
+            Vector2 pos = new Vector2(transform.position.x, transform.position.y);
+            var content = new Hashtable
+            {
+                { "a", MyActor() },
+                { "x", pos.x }, { "y", pos.y },
+                { "r", HideSeekConstants.FreezeRadius },
+                { "f", HideSeekConstants.FreezeSlowFactor },
+                { "d", HideSeekConstants.FreezeDuration }
+            };
+            Net.RaiseAll(HideSeekConstants.EvtFreeze, content, true);
+
+            if (UIManager.Instance != null) UIManager.Instance.NotifyFreeze(pos, HideSeekConstants.FreezeRadius);
+            if (controller != null) rootRoutine = StartCoroutine(CoroutineSelfRoot(HideSeekConstants.FreezeSelfRoot));
+            return true;
+        }
+
+        /// <summary>Pemakai tidak boleh bergerak selama FreezeSelfRoot (supaya tidak gratis kabur).</summary>
+        private IEnumerator CoroutineSelfRoot(float seconds)
+        {
+            if (controller != null) controller.FreezeForProp(true);
+            yield return new WaitForSeconds(Mathf.Max(0.05f, seconds));
+            if (controller != null) controller.FreezeForProp(false);
+            rootRoutine = null;
         }
 
         /// <summary>

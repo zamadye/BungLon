@@ -66,7 +66,10 @@ Tools/hideseek_art_postprocess.py   (keying/segmentasi/resize PNG art, hanya pil
    `gameSceneName="Game"`, `loadGameSceneOnStart` (hanya di Lobby), dan mendaftarkan kedua scene
    ke **Build Settings** otomatis. Setelah ini tinggal isi App ID → Play.
 7b. (opsional) Punya aset AI? Taruh PNG di `Assets/Art/HideSeek/**` lalu
-   **HideSeek → Setup → 5. Pasang Art AI** → sprite karakter/prop/tile/ikon/background
+   **HideSeek → Setup → 5. Pasang Art AI** → sprite karakter/prop/tile/ikon/background (termasuk `Icon_Freeze`)
+5b. (opsional) port HUD blueprint ke Unity: **HideSeek → Setup → 6. Bangun HUD v2** → zona
+       TL/TC/TR/ML/BR + safe-area + 3 tombol skill ber-ring cooldown + panel Settings. Detail di
+       bagian *UI/UX v2.2*.
    terpasang ke prefab + Canvas otomatis. Detail pipeline: `Assets/Art/prompts.md`.
 8. Isi App ID (lihat langkah 1 di bawah), lalu **Play** di scene **Lobby**. Tekan `N` = buat room,
    `J` = quick play, `Space` = Start (host). Test sendirian: centang **`offlineMode`** di
@@ -78,7 +81,7 @@ Tools/hideseek_art_postprocess.py   (keying/segmentasi/resize PNG art, hanya pil
 > **Tidak punya Unity sekarang?** Ada build web (HTML5 canvas) yang memakai aturan & sprite yang
 > sama: `node web/net-server.js` → buka `http://localhost:8790` → **MAIN SENDIRI (bots)**.
 > Detail + cara uji: **bagian 10**. Build web = demo/prototipe; rilis Play Store tetap lewat Unity.
-> Test otomatis: `node tools/web_selftest.js` (192 assertion: konstanta C# == aturan web) · `npm test` di `web/` menjalankan 4 suite (667 assertion, 0 FAIL).
+> Test otomatis: `node tools/web_selftest.js` (243 assertion: konstanta C# == aturan web) · `npm test` di `web/` menjalankan 4 suite (774 assertion, 0 FAIL).
 
 ---
 
@@ -370,12 +373,40 @@ kuota iklan 1/2/2 + gap 12 s). **`tools/web_selftest.js` membaca file C# dan mem
  angkanya**, jadi kalau konstanta Unity diubah lalu web lupa disinkronkan, test gagal.
 
 ```bash
-node tools/web_selftest.js    # 192 assertion: paritas konfigurasi + rules (phase, camo, hit,
-                              #   catch, blast/radar, leaderboard, kuota reward, snapshot, bot AI)
-node tools/web_dom_smoke.js   # 118 assertion: lapisan browser (loader, renderer, HUD, iklan/referral, UI v2 + v2.1)
-                              #   joystick, overlay iklan) dijalankan di DOM tiruan
+node tools/web_selftest.js    # 243 assertion: paritas konfigurasi + rules (phase, camo, hit,
+                              #   catch, blast/radar, freeze/aim/hud-v2, leaderboard, kuota reward, snapshot, bot AI)
+node tools/web_dom_smoke.js   # 143 assertion: lapisan browser (loader, renderer, HUD, iklan/referral,
+                              #   UI v2 + v2.1 + kamera/aim/Freeze v2.2) dijalankan di DOM tiruan
 python3 tools/web_map_preview.py   # PNG QC peta: zoning tile + spot prop + ring spawn (ArtRaw/)
 ```
+
+### UI/UX v2.2 (kamera, aim Prop, skill Bekukan + port HUD ke Unity)
+
+Tiga rasa baru di web, dan semuanya punya padanan C# supaya kedua build tetap satu game:
+
+| Fitur | Web (`web/`) | Unity (`Assets/Scripts/`) |
+| --- | --- | --- |
+| **Kamera `smooth follow` + `zoom out` saat lari** — diam `1.25`, lari `1.08`, fase SEEK `1.00` (1.00 = seluruh peta terlihat, jadi tidak pernah ada tepi hitam) | `uiKit.js` kelas `Camera2D` (`BungUI.Camera`), dipakai `game.js` lewat `camStep(dt)`; angka dari `CFG.camIdle/camRun/camSeek/camRunSpeed/camSmooth` | `Utils/PlayerCamera.cs` (`useConstantZoomRatio`, `zoomOutOnRun`) mengambil rasio dari `HideSeekConstants.CamIdleZoom/CamRunZoom/CamSeekZoom/CamRunSpeed/CamSmoothTime` |
+| **Aim "tahan → seret → lepas" untuk Prop Swap** — lepas di atas prop tujuan = menyamar jadi prop itu; lepas tanpa seret = perilaku lama (prop dipilih game) | `Round.propCandidates(p, CFG.propAimRadius)` + `usePropSwap(p, wantName)`; overlay garis + ring + nama prop digambar di kanvas; hint `#aimHint`; lewat jaringan dikirim sebagai `pn` | `HiderSkill.CastPropSwap(byte propId)` + `GetPropChoices()`; routing tunggal `UIManager.UseSkill(slot, propId)`; popup kandidat dibangun `UI/Hud/HudV2SkillButton.cs` (mode `propAimMode`) |
+| **Skill `Bekukan` (Freeze)** — Seeker dalam 4 unit melambat jadi 35 % selama 2,5 dtk; pemakainya terpaku 0,8 dtk; cooldown sendiri 14 dtk (tidak merebut slot Kamuflase/Prop) | `Round.useFreeze(p)` + `CFG.freezeRadius/freezeTime/freezeSlow/freezeCd/freezeRoot`; jadi tombol skill ke-3 (`Icon_Freeze`), pintasan keyboard `3`; event `freeze` → SFX + haptic + ring partikel | `HiderSkill.CastFreeze()` → `Net.RaiseAll(EvtFreeze, …)`; korban menerapkan `ApplySpeedSlow()` di `PlayerController.OnEvent`; root via `FreezeForProp(true)`; konstanta di `HideSeekConstants` |
+
+Catatan implementasi:
+
+- **Satu sumber angka.** `tools/web_selftest.js` membandingkan tiap konstanta di atas dengan nilai di
+  `HideSeekConstants.cs`; angka yang cuma diubah di satu sisi bikin test merah.
+- **Kamera bisa dimatikan**: `?cam=0` mengembalikan render fit-penuh (dipakai `tools/web_map_preview.py`
+  dan kalau ingin merasa kamera "mengganggu"). Debug lewat console: `hideSeekGame.ui.cam`, `.view`, `.aim`.
+- **Port HUD v2 ke Unity (Phase 2 blueprint)** = folder `Assets/Scripts/UI/Hud/`:
+  `HudV2Theme.cs` (1 warna = 1 makna, MM:SS, state <10 dtk / ≤5 dtk, target sentuh 44 px),
+  `HudSafeArea.cs` (notch via `Screen.safeArea`), `HudV2SkillButton.cs` (ring cooldown radial +
+  haptic + popup aim), `HudV2DamageText.cs` (angka damage melayang, dipool),
+  `HudV2LocalBoard.cs` (top-10 di `PlayerPrefs` kunci `hideseek_scores_unity` — kosmetik, sama
+  seperti web), `HudV2Settings.cs` (sensitivitas tuas 0,7–1,5 + musik/SFX + hapus rekor, disimpan
+  di `PlayerPrefs` kunci `hideseek_ui`). Semua referensi di-assign manual; menu Setup → 6
+  membangun hierarkinya lalu mengisi field `UIManager` (termasuk slot skill ke-3, yang otomatis
+  disembunyikan untuk Seeker).
+- **Khusus Hider, HUD kini 3 tombol** (Kamuflase · Prop · Bekukan), Seeker tetap 2 (Radar · Blast);
+  ikonnya ditukar per role, jadi `Icon_Radar`/`Icon_SonicBlast` dipakai ulang di tombol yang sama.
 
 ### Aset media
 
@@ -425,7 +456,7 @@ Yang **sengaja** menyimpang dari blueprint: 4 skill tidak ditampilkan sekaligus 
 ```bash
 node tools/web_ui_test.js      # 227 assertion: blueprint->CSS/HTML, uiKit, audioKit,
                                #   partikel, XP/level, sensitivitas, LocalScores, PWA
-node tools/web_dom_smoke.js    # 118 PASS: blok [6] menjalankan hasil ronde asli di DOM
+node tools/web_dom_smoke.js    # 143 PASS: blok [6] hasil ronde asli + [7] kamera/aim/Freeze di DOM
                                #   tiruan -> rank/XP/bar level/rekor lokal + shake & partikel
 ```
 
@@ -442,8 +473,8 @@ Dua modul vanilla JS, tanpa dependency — detail lengkap ada di **[`integration
 
 ```bash
 node tools/web_ads_referral_test.js   # 130 assertion: cooldown, fallback, ?ref=, hadiah
-node tools/web_dom_smoke.js           # 118 PASS: lapisan browser + [4] iklan/referral + [5] UI v2 + [6] UI v2.1
-node tools/web_ui_test.js             # 227 PASS: blueprint→CSS/HTML, uiKit, audioKit, partikel, XP, PWA
+node tools/web_dom_smoke.js           # 143 PASS: lapisan browser + [4] iklan/referral + [5] UI v2 + [6] v2.1 + [7] v2.2
+node tools/web_ui_test.js             # 258 PASS: blueprint→CSS/HTML, uiKit (+Camera2D), audioKit, partikel, XP, PWA
 ```
 
 Saat iklan tayang, `game.pause()` dipanggil (loop `step()` dibekukan, ada label **IKLAN**), lalu

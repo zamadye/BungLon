@@ -175,7 +175,7 @@ console.log('\n[2] lapisan browser game.js jalan di DOM tiruan');
   ok('renderer memanggil drawImage (tile + sprite)', stats.drawImage > 50, stats.drawImage);
   ok('nama pemain digambar (fillText)', stats.fillText > 10, stats.fillText);
   ok('?solo=1 mengisi roster bot (hearts dibuat)', getEl('hearts').children.length === 3, getEl('hearts').children.length);
-  ok('2 tombol skill dibuat untuk hider', getEl('skills').children.length === 2, getEl('skills').children.map(c => c.className));
+  ok('3 tombol skill dibuat untuk hider (Kamuflase, Prop, Bekukan)', getEl('skills').children.length === 3, getEl('skills').children.map(c => c.className));
   ok('teks fase terisi', /SEMBUNYI|BERSEMBUNYI|HIDE|COUNTDOWN|DIKEJAR|HITUNG MUNDUR/i.test(getEl('phase').textContent), getEl('phase').textContent);
   ok('ukuran pilihan room diisi (2..12)', getEl('sizeSel').children.length === 11, getEl('sizeSel').children.length);
 
@@ -444,3 +444,117 @@ process.on('exit', () => {
   console.log(`\n=== web_dom_smoke: ${pass} PASS, ${fail} FAIL ===`);
   if (fail) process.exitCode = 1;
 });
+
+(async () => {
+  /* ---------- [7] UI v2.2: kamera follow+zoom, aim Prop, skill Freeze ---------- */
+  console.log('\\n[7] UI v2.2: kamera (follow+zoom), aim Prop, skill Freeze');
+  {
+    const before = fail;
+    const { CFG } = require(path.join(ROOT, 'web/game.js'));
+    const G = global.hideSeekGame, ui = G && G.ui, R = getRound();
+    const fireWin = (t, ev) => { for (const fn of (winHandlers[t] || [])) fn(Object.assign({ preventDefault() { }, stopPropagation() { }, pointerId: 1 }, ev)); };
+    ok('kamera dibuat dari UI.Camera + aktif (bisa dimatikan ?cam=0)', !!ui.cam && typeof ui.cam.step === 'function' && ui.cam.enabled, !!ui.cam);
+
+    /* 1) clamp: pemain di ujung mana pun tidak boleh membuat view keluar peta */
+    const me = R.me();
+    // blok [6] mengubah pemain lokal jadi hantu/RESULT; kembalikan ke keadaan main.
+    me.ghost = false; me.alive = true; me.role = 0; me.hp = me.maxHp; R.myId = me.id;
+    me.isBot = false; me.brain = { t: 0, goal: null, mood: 0 };   // jangan digerakkan AI bot
+    const other = [...R.players.values()].find(q => q.id !== me.id);
+    other.role = 1; other.ghost = false; other.alive = true; R.seekerId = other.id;
+    if (G.resume) G.resume();                   // metaPaused (iklan) harus dilepas
+    if (ui && ui.setPaused) ui.setPaused(false);
+    if (!rafQ.length) console.log('    (diagnostik) rafQ kosong; paused=' + (ui && ui.paused));
+    R.enterPhase('HIDE'); R.phaseEnd = R.t + 60;
+    me.x = 99; me.y = -99; me.input.dx = 0; me.input.dy = 0;
+    for (let i = 0; i < 200; i++) ui.camStep(0.05);
+    ok('kamera ter-clamp ke tepi peta (tidak ada letterbox hitam)',
+      Math.abs(ui.cam.x) <= R.map.cols / 2 + 0.01 && Math.abs(ui.cam.y) <= R.map.rows / 2 + 0.01, [ui.cam.x.toFixed(2), ui.cam.y.toFixed(2)]);
+    const vw = ui.camViewUnits();
+    ok('view tidak pernah lebih besar dari peta', vw.w <= R.map.cols + 2.01 && vw.h <= R.map.rows + 2.01, [vw.w.toFixed(2), vw.h.toFixed(2)]);
+
+    /* 2) zoom adaptif: lari melebar, diam mendekat, SEEK paling lebar */
+    me.x = 0; me.y = 0;
+    ui.cam.zoom = ui.cam.zoomIdle;
+    me.input.dx = 1; for (let i = 0; i < 40; i++) ui.camStep(0.05);
+    const zRun = ui.cam.zoom;
+    me.input.dx = 0; for (let i = 0; i < 90; i++) ui.camStep(0.05);
+    const zIdle = ui.cam.zoom;
+    ok('lari = zoom lebih melebar daripada diam', zRun < zIdle - 0.01, [zRun.toFixed(3), zIdle.toFixed(3)]);
+    R.enterPhase('SEEK');
+    for (let i = 0; i < 90; i++) ui.camStep(0.05);
+    ok('fase SEEK = paling melebar', ui.cam.zoom < zRun + 0.01, [ui.cam.zoom.toFixed(3), zRun.toFixed(3)]);
+    R.enterPhase('HIDE'); R.phaseEnd = R.t + 30;
+
+    /* 3) kamera benar-benar mengubah proyeksi; ?cam=0 = perilaku lama (fit penuh) */
+    ui.cam.zoom = CFG.camIdle; ui.cam.x = 2; ui.cam.y = 1; ui.applyCam();
+    const v1 = ui.view;
+    ok('scale = fitScale x zoom kamera', Math.abs(v1.scale - v1.fitScale * CFG.camIdle) < 1e-6, [v1.scale.toFixed(3), (v1.fitScale * CFG.camIdle).toFixed(3)]);
+    ok('posisi layar titik dunia bergeser saat kamera digeser', Math.abs(ui.w2sx(2) - ui.w2sx(0)) > 1, [ui.w2sx(0).toFixed(1), ui.w2sx(2).toFixed(1)]);
+    ui.cam.enabled = false; ui.camStep(0.05); ui.applyCam();
+    const v0 = ui.view;
+    ok('?cam=0 -> zoom 1 di tengah (dipakai tools/web_map_preview.py)', v0.scale === v0.fitScale && ui.cam.x === 0 && ui.cam.zoom === 1, [v0.scale.toFixed(3), v0.fitScale.toFixed(3)]);
+    ui.cam.enabled = true;
+
+    /* 4) slot skill ke-3 (Bekukan) + cooldown sendiri */
+    const btns = getEl('skills').children;
+    const byField = f => { for (const b of btns) if (b.dataset && b.dataset.field === f) return b; return null; };
+    const propBtn = byField('skill2'), frzBtn = byField('skill3');
+    ok('3 slot skill utk Hider: skill1/skill2/skill3', !!byField('skill1') && !!propBtn && !!frzBtn, btns.map(b => b.dataset && b.dataset.field));
+    ok('ikon skill #3 = Icon_Freeze (aset AI baru)', /Icon_Freeze/.test(String(frzBtn && frzBtn.innerHTML)), String(frzBtn && frzBtn.innerHTML).slice(0, 60));
+
+    const seeker = other;
+    me.propDef = null; me.cdHider = 0; me.cdFreeze = 0; me.rootUntil = 0; me.pendingPropName = null;
+    const pr = R.map.props[0]; me.x = pr.wx; me.y = pr.wy;
+    if (seeker) { seeker.slowUntil = 0; seeker.slowFactor = 1; seeker.x = me.x + 1.5; seeker.y = me.y; }
+    frzBtn.dispatch('pointerdown', {});
+    pump(1);
+    ok('tombol Bekukan -> input.skill3 -> Seeker dalam radius melambat',
+      !!seeker && seeker.slowUntil > R.t && Math.abs(seeker.slowFactor - CFG.freezeSlow) < 1e-9, [seeker && seeker.slowUntil.toFixed(2), seeker && seeker.slowFactor]);
+    ok('Freeze pakai cooldown sendiri (CFG.freezeCd), bukan hiderCd', me.cdFreeze > R.t && me.cdHider < me.cdFreeze, [me.cdFreeze.toFixed(2), me.cdHider.toFixed(2), CFG.freezeCd]);
+    ok('pencast terpaku sesaat (rootUntil) - tidak kabur gratis', me.rootUntil > R.t, me.rootUntil.toFixed(2));
+    ok('cincin cooldown skill #3 ikut berputar (conic-gradient)', /conic-gradient/.test(String(frzBtn.querySelector('.cd').style.background)), String(frzBtn.querySelector('.cd').style.background).slice(0, 44));
+    me.propDef = null; frzBtn.dispatch('pointerdown', {}); pump(1);
+    ok('Freeze kedua saat cooldown ditolak aturan', me.cdFreeze >= R.t && me.cdFreeze > 0, me.cdFreeze.toFixed(2));
+
+    /* 5) mode aim Prop: tahan -> seret -> lepas */
+    me.propDef = null; me.propUntil = 0; me.cdHider = 0; me.rootUntil = 0; me.pendingPropName = null;
+    me.x = pr.wx; me.y = pr.wy;
+    ui.setPaused(true); ui.setPaused(false);   // joystick.reset(): buang sisa drag tuas dari blok [5]
+    const px = ui.w2sx(me.x) / ui.dpr, py = ui.w2sy(me.y) / ui.dpr;
+    const ftBefore = stats.fillText;
+    propBtn.dispatch('pointerdown', { clientX: px, clientY: py });
+    ok('tahan tombol Prop -> mode aim aktif (kelas aiming + #aimHint.on)',
+      /aiming/.test(propBtn.className) && getEl('aimHint').className === 'on', [propBtn.className, getEl('aimHint').className]);
+    fireWin('pointermove', { clientX: px + 26, clientY: py - 20 });
+    const pickName = ui.aim.pick;
+    ok('seret -> kandidat prop ter-pick (dalam radius aim)', !!pickName, pickName);
+    pump(1);
+    ok('overlay aim ikut digambar (label prop)', stats.fillText > ftBefore, [ftBefore, stats.fillText]);
+    ok('tombol Prop menandai pilihan (kelas picked)', /picked/.test(propBtn.className), propBtn.className);
+    // aturan lama: bergerak membatalkan swap. Tombol panah dari blok [6] masih "ditahan"
+    // di DOM tiruan, jadi lepas dulu semua tombol geraknya.
+    for (const k of ['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright']) dispatchEventKey('keyup', k);
+    me.input.dx = 0; me.input.dy = 0;
+    fireWin('pointerup', { clientX: px + 26, clientY: py - 20 });
+    pump(1);
+    ok('lepas -> wujud = prop yang dipilih, bukan acak', me.propDef && me.propDef.name === pickName, [me.propDef && me.propDef.name, pickName]);
+    ok('selesai aim -> hint hilang & kelas aiming dilepas', getEl('aimHint').className === '' && !/aiming/.test(propBtn.className), [getEl('aimHint').className, propBtn.className]);
+
+    me.propDef = null; me.propUntil = 0; me.cdHider = 0; me.pendingPropName = null;
+    me.input.dx = 0; me.input.dy = 0;
+    propBtn.dispatch('pointerdown', { clientX: px, clientY: py });
+    fireWin('pointerup', { clientX: px, clientY: py });
+    pump(1);
+    ok('tap singkat tetap swap (fallback perilaku lama, tanpa nama tujuan)', !!me.propDef && !me.pendingPropName, [me.propDef && me.propDef.name, me.pendingPropName]);
+
+    me.propDef = null; me.cdHider = 0; me.pendingPropName = null;
+    propBtn.dispatch('pointerdown', { clientX: px, clientY: py });
+    fireWin('pointercancel', {});
+    ok('pointercancel -> tidak swap, cooldown utuh', !me.propDef && me.cdHider === 0, [me.propDef, me.cdHider]);
+    ok('keyboard "3" mengirim skill3', /skill3/.test(String(fs.readFileSync(path.join(ROOT, 'web/game.js'), 'utf8').match(/if \(k === '3'\)[^\n]*/))), 'anchor hilang');
+    ok('tidak ada exception di blok kamera/aim/Freeze', fail === before, fail - before);
+  }
+})().catch(e => { console.log('  \x1b[31mEXCEPTION\x1b[0m ' + (e && e.stack || e)); fail++; });
+
+

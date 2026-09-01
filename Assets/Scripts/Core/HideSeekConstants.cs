@@ -112,6 +112,7 @@ namespace HideSeek.Core
         public const byte EvtAssignRole = 208;    // [RELIABLE]         {int actor, byte role} (Host -> tiap klien set prop dirinya)
         public const byte EvtSlow = 209;          // [UNRELIABLE]       {int actor, float factor, float dur} (kena Sonic Blast)
         public const byte EvtStateChange = 210;   // [RELIABLE]         {byte state, float duration, int round} (fallback bila PunRPC tak tersedia)
+        public const byte EvtFreeze = 211;        // [RELIABLE]         {int actor, float x, float y, r, f, d} - Freeze (skill #3 Hider)
         public const byte EvtRewardRevive = 213;  // [MASTER CLIENT]    {int actor} minta bangkit (rewarded ad) - HANYA Host yang mengabulkan
 
         // ------------------------------------------------------------------
@@ -144,6 +145,31 @@ namespace HideSeek.Core
         public const float SonicBlastRadius = 5.0f;
         public const float SonicSlowFactor = 0.5f;
         public const float SonicSlowDuration = 2.0f;
+
+        /// <summary>
+        /// FREEZE (skill #3 Hider, parity web CFG.freeze*): pulsa area yang memperlambat semua
+        /// Seeker di dalam radius selama FreezeDuration, dan memaku pemakainya sebentar supaya
+        /// tidak gratis kabur. Cooldown sendiri (FreezeCooldown) agar tidak merebut slot
+        /// Kamuflase/Prop yang memakai HiderSkillCooldown.
+        /// </summary>
+        public const float FreezeRadius = 4.0f;
+        public const float FreezeDuration = 2.5f;
+        public const float FreezeSlowFactor = 0.35f;
+        public const float FreezeCooldown = 14.0f;
+        public const float FreezeSelfRoot = 0.8f;
+
+        /// <summary>Prop Swap ber-arah: radius kandidat saat mode "tahan -> seret -> lepas".</summary>
+        public const float PropAimPickRadius = 2.5f;
+
+        /// <summary>
+        /// Kamera: 1.0 = seluruh peta terlihat; zoomIdle lebih dekat (diam), zoomRun/zoomSeek
+        /// melebar. Dipakai Utils/PlayerCamera.cs dan web/uiKit.js Camera2D (satu sumber angka).
+        /// </summary>
+        public const float CamIdleZoom = 1.25f;
+        public const float CamRunZoom = 1.08f;
+        public const float CamSeekZoom = 1.0f;
+        public const float CamRunSpeed = 4.8f;
+        public const float CamSmoothTime = 0.12f;
 
         /// <summary>Pushback saat Hider dipukul Seeker: 3 meter.</summary>
         public const float PushbackDistance = 3.0f;

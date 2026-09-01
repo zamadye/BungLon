@@ -11,13 +11,14 @@ tanpa build step. Dua sistem di sini berdiri sendiri: boleh dipakai di project H
 | `web/config.example.js` | template konfigurasi (`window.HIDESEEK_CONFIG`). **ID iklan tidak pernah ditulis di kode** |
 | `tools/gen_web_config.js` | pembangkit `web/config.js` dari `.env` (di-gitignore) |
 | `web/game.js` | contoh pemakaian nyata: tombol HUD, koin, +1 nyawa, jeda permainan |
-| `web/uiKit.js` | lapisan UI vanilla: `Joystick` (deadzone + sensitivitas), `SkillButton` (cincin cooldown), `Screens`, `Fx`, `Viewport`, `Haptics` — tidak dipakai `AdsManager`/`ReferralSystem`, jadi tidak wajib disalin |
+| `web/uiKit.js` | lapisan UI vanilla: `Joystick` (deadzone + sensitivitas), `SkillButton` (cincin cooldown), `Camera2D` (kamera follow+zoom, padanan `Utils/PlayerCamera.cs`), `Screens`, `Fx`, `Viewport`, `Haptics` — tidak dipakai `AdsManager`/`ReferralSystem`, jadi tidak wajib disalin |
 | `web/audioKit.js` | SFX + BGM sintesis Web Audio, `duck()` saat iklan (dipanggil game.js, opsional) |
 | `web/particles.js` | FX canvas (debu lari, burst kena, sparkle koin, cincin blast/radar); menghormati `prefers-reduced-motion` |
 | `web/ui.css`, `web/index.html` | zoning + layar; **id elemen lama dipertahankan** sehingga `#coins`, `#lives`, `#maxhpTag`, `#adLifeBtn`, `#adCoinsBtn`, `#inviteBtn` tetap seperti di §3–§7 |
-| `web/assets/UI_HealthFrame.png`, `UI_MinimapFrame.png`, `Icon_Coin.png`, `Icon_Life.png`, `Bg_Splash.jpg` | aset UI (bingkai HP & minimap, ikon koin/nyawa pengganti emoji, latar splash) — ikut di-precache `web/sw.js` |
+| `web/assets/UI_HealthFrame.png`, `UI_MinimapFrame.png`, `Icon_Coin.png`, `Icon_Life.png`, `Icon_Freeze.png`, `Bg_Splash.jpg` | aset UI (bingkai HP & minimap, ikon koin/nyawa/bekukan pengganti emoji, latar splash) — ikut di-precache `web/sw.js`; `Icon_Freeze.png` juga ada di `Assets/Art/HideSeek/Icons/` untuk build Unity |
+| `Assets/Scripts/UI/Hud/*.cs` | port HUD v2 ke Unity (tema & warna, safe-area, tombol skill + popup aim Prop, damage number, rekor lokal, panel Settings sensitivitas/audio) — dibangun otomatis oleh menu **HideSeek → Setup → 6** |
 | `tools/web_ads_referral_test.js` | 130 assertion headless (tanpa browser) |
-| `tools/web_dom_smoke.js` | blok `[4]` integrasi iklan/referral, `[5]` UI v2, `[6]` layar hasil (rank/XP/rekor lokal) di DOM tiruan |
+| `tools/web_dom_smoke.js` | blok `[4]` integrasi iklan/referral, `[5]` UI v2, `[6]` layar hasil (rank/XP/rekor lokal), `[7]` kamera + aim Prop + skill Freeze di DOM tiruan |
 
 ---
 
@@ -217,14 +218,30 @@ Sejak UI v2.1 ada dua kunci tambahan yang **tidak** berkaitan dengan ekonomi ikl
 
 UI v2.1 (partikel canvas + guncangan layar, XP/level & peringkat di layar hasil, sensitivitas joystick, papan skor lokal top-10 di `localStorage['hideseek_scores']`) hanyalah lapisan tampilan + progres lokal: **kontrak `AdsManager` dan `ReferralSystem` tidak berubah**, jadi seluruh §1–§7 di dokumen ini tetap berlaku. Level/XP web-only — aturan skor/koin yang diparitas dengan C# tidak disentuh.
 
+UI v2.2 menambahkan tiga hal yang **sengaja dibuat kembar dua sisi** (web + Unity) sehingga tidak bisa berbeda rasa:
+
+| | web | Unity |
+| --- | --- | --- |
+| kamera `smooth follow`, `zoom out` saat lari / fase SEEK | `uiKit.js` → `BungUI.Camera` (`Camera2D`); dinonaktifkan dengan `?cam=0` | `Utils/PlayerCamera.cs` (`useConstantZoomRatio`, `zoomOutOnRun`, `smoothTime`) |
+| aim Prop "tahan → seret → lepas" | `Round.propCandidates()` + `usePropSwap(p, wantName)`; lewat jaringan dikirim sebagai field `pn` di event `in` | `HiderSkill.CastPropSwap(byte propId)` + `GetPropChoices()`; routing `UIManager.UseSkill(slot, propId)`; popup = `HudV2SkillButton` |
+| skill Bekukan (Freeze) — Seeker 4 unit → 35 % selama 2,5 dtk, caster terpaku 0,8 dtk, cooldown 14 dtk sendiri | `Round.useFreeze()`, tombol skill ke-3 (`Icon_Freeze`), pintasan `3`, input `skill3` → event `s3` | `HiderSkill.CastFreeze()` → `Net.RaiseAll(EvtFreeze)`; korban: `PlayerController.OnEvent` → `ApplySpeedSlow()`; root: `FreezeForProp(true)` |
+
+Angkanya tinggal satu sumber: `tools/web_selftest.js` membandingkan `CFG.*` (web) dengan
+`HideSeekConstants.cs` (Unity) untuk `freezeRadius/freezeTime/freezeSlow/freezeCd/freezeRoot`,
+`propAimRadius` ↔ `PropAimPickRadius`, dan `camIdle/camRun/camSeek/camRunSpeed/camSmooth` ↔
+`Cam*Zoom/CamRunSpeed/CamSmoothTime`. Port HUD v2 ke Unity memakai `UnityEngine.Text` (bukan TMP)
+agar cocok dengan referensi `UIManager` yang sudah ada, dan disimpan di `PlayerPrefs` kunci
+`hideseek_ui` / `hideseek_scores_unity` (padanan `localStorage` web — keduanya kosmetik, bukan
+dasar pembayaran reward).
+
 ```bash
 node web/net-server.js            # http://localhost:8790/  → MAIN SENDIRI (bots)
 node tools/gen_web_config.js      # opsional, dari .env
-node tools/web_selftest.js        # 192 PASS — rules engine 1:1 dengan C#
-node tools/web_dom_smoke.js       # 118 PASS — browser tiruan + [4] iklan/referral + [5] UI v2 + [6] UI v2.1
+node tools/web_selftest.js        # 243 PASS — rules engine 1:1 dengan C# (+ paritas Freeze/aim/HUD v2)
+node tools/web_dom_smoke.js       # 143 PASS — browser tiruan + [4] iklan/referral + [5] UI v2 + [6] v2.1 + [7] v2.2
 node tools/web_ads_referral_test.js  # 130 PASS — AdsManager + ReferralSystem + Profile
-node tools/web_ui_test.js         # 227 PASS — uiKit, audioKit, particles, XP/level, sensitivitas, LocalScores, PWA
-cd web && npm test                # keempatnya sekaligus (667 assertion)
+node tools/web_ui_test.js         # 258 PASS — uiKit (+Camera2D), audioKit, particles, XP/level, sensitivitas, LocalScores, PWA
+cd web && npm test                # keempatnya sekaligus (774 assertion, 0 FAIL)
 ```
 
 Verifikasi cepat di browser: buka game → tekan `?solo=1` → klik **📺 Dapatkan Koin** → overlay iklan
