@@ -1,7 +1,10 @@
 # Panduan Integrasi — Iklan (AdsManager) + Referral (ReferralSystem)
 
 Versi HTML5/JS **BUNGLON! / HideSeek Online** (`web/`). Vanilla JS, nol dependency,
-tanpa build step. Dua sistem di sini berdiri sendiri: boleh dipakai di project HTML5 lain
+tanpa build step, dan **baseline sintaks ES2019** untuk semua file yang dimuat `<script>`
+(`?.`, `??`, `||=`, `#field`, `static {}`, `.at()`, `Object.hasOwn`, `.replaceAll`, `Promise.any`
+dilarang — satu token ES2020 membuat browser lama membuang seluruh file, dan gejalanya adalah
+"stuck di loading"; dikunci `tools/web_boot_test.js` grup `[G]`). Dua sistem di sini berdiri sendiri: boleh dipakai di project HTML5 lain
 (Cocos export, Phaser, canvas custom) cukup dengan menyalin 2 file + 4 baris init. Backend opsional (akun/JWT/referral/Game ID) juga nol dependency — lihat **§9**.
 
 | File | Isi |

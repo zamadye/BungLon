@@ -220,9 +220,221 @@ function run(mode) {
     ok('game.js memberi tahu watchdog inline saat boot selesai (dismiss)', /BungBootInline\.dismiss\(\)/.test(rd('web/game.js')), '');
     ok('watchdog inline dibungkus try/catch penuh (tidak pernah jadi sumber error)', /\(function \(\) \{\s*try \{/.test(html), '');
     ok('file:// dilaporkan SEGERA (tanpa menunggu 9 dtk) karena memang tidak bisa jalan',
-      /location\.protocol === 'file:'/.test(html) && /if \(location\.protocol === 'file:'\) \{ show\(\); \}/.test(html), '');
+      /if \(location\.protocol === 'file:'\) show\(\);/.test(html), '');
     ok('?fresh= / ?nosw=1 tidak dihakimi watchdog (mode pemulihan)', /fresh=\|nosw=1/.test(html), '');
   }
+
+  console.log('\n[G] baseline sintaks browser + service worker (disimulasi) + panel diagnosis');
+  {
+    const vm = require('vm');
+    const html = rd('web/index.html'), swSrc = rd('web/sw.js');
+
+    /* ---------- 1) baseline: file yang dimuat browser tidak boleh pakai sintaks > ES2019 ---------- */
+    const RISK = {
+      'optional chaining ?. (ES2020)': /\?\.[a-zA-Z_$[(]/,
+      'nullish ?? (ES2020)': /(?:^|[^?!])\?\?[^?=]/,
+      'logical assign ||= &&= ??= (ES2021)': /(?:\?\?=|\|\|=|&&=)/,
+      'private field #x (ES2022)': /(?:this\\.#|^[ \\t]{2,}#[a-zA-Z_$][\\w$]*\\s*=)/m,
+      'static block (ES2022)': /\bstatic\s*\{/,
+      'Array.at(-n) (ES2022)': /\.at\(\s*-/,
+      'Object.hasOwn (ES2022)': /Object\.hasOwn/,
+      'String.replaceAll (ES2021)': /\.replaceAll\(/,
+      'String.matchAll (ES2020)': /\.matchAll\(/,
+      'Promise.any/allSettled (ES2021)': /Promise\.(any|allSettled)\(/,
+      'BigInt literal (ES2020)': /[^.\w]\d+_[\d_]*n\b/,
+    };
+    for (const f of ['game.js', 'uiKit.js', 'audioKit.js', 'particles.js', 'adsManager.js', 'referralSystem.js', 'apiKit.js', 'sw.js']) {
+      const src = rd('web/' + f);
+      const hits = Object.keys(RISK).filter(k => RISK[k].test(src));
+      ok('browser-file bersih sintaks ES2020+ (satu SyntaxError = game tidak pernah mulai): ' + f, hits.length === 0, hits);
+    }
+    ok('globalThis hanya di dalam penjaga typeof (Safari 12 tidak punya)',
+      ['particles.js', 'apiKit.js'].every(f => rd('web/' + f).split('\n').filter(l => l.includes('globalThis') && !/typeof globalThis/.test(l)).length === 0), '');
+    ok('watchdog inline sendiri bebas panah/const/template (ES5-safe, harus jalan di browser apa pun)',
+      !/=>|`|\bconst \w+ =|\blet \w+ =/.test(html.slice(html.indexOf('Jaring pengaman boot LAPIS PERTAMA'), html.indexOf('pengaman tidak boleh menjadi sumber error baru'))), '');
+
+    /* ---------- helper: pembuat Response/Request/caches tiruan ---------- */
+    const ORIGIN = 'http://g.test';
+    const abs = u => (/^https?:/.test(u) ? u : ORIGIN + '/' + String(u).replace(/^(\.\/|\/)/, ''));
+    const keyOf = k => abs(typeof k === 'string' ? k : ((k && k.url) || String(k)));
+    const mkRes = (u, body, type, status) => ({
+      ok: (status || 200) < 400, status: status || 200, url: abs(u), headers: { get: h => (String(h).toLowerCase() === 'content-type' ? type : null) },
+      clone() { return this; }, text: () => Promise.resolve(body),
+    });
+    const JS = 'application/javascript; charset=utf-8', HMTL = 'text/html; charset=utf-8';
+
+    /* ---------- 2) service worker: install tidak menyimpan racun, hit basi dibuang ---------- */
+    async function bootSW(net) {
+      const cachesMap = new Map();
+      const mkCache = name => {
+      const m = new Map();
+      const c = {                                    // yang disimpan = OBJEK cache-nya (punya put/match/delete)
+      _m: m,
+      put: async (k, r) => { m.set(keyOf(k), r); },
+      match: async (k) => m.get(keyOf(k)) || null,
+      delete: async (k) => m.delete(keyOf(k)),
+      add: async (k) => { m.set(keyOf(k), await net({ url: keyOf(k) })); },
+      };
+      cachesMap.set(name, c);
+      return c;
+      };
+      const handlers = {};
+      let responded = null;
+      const ctx = {
+        console: { log() { }, warn() { }, error() { } }, URL, Promise, setTimeout, setInterval, clearInterval,
+        self: {
+          location: { origin: ORIGIN }, addEventListener: (t, f) => { handlers[t] = f; },
+          skipWaiting: () => Promise.resolve(), clients: { claim: () => Promise.resolve() },
+        },
+        caches: {
+          open: async n => cachesMap.get(n) || mkCache(n),
+          match: async k => { for (const c of cachesMap.values()) { const h = await c.match(k); if (h) return h; } return null; },
+          keys: async () => Array.from(cachesMap.keys()),
+          delete: async n => cachesMap.delete(n),
+        },
+        fetch: req => net({ url: keyOf(typeof req === 'string' ? req : ((req && req.url) || String(req))) }),
+        Request: function (u) { this.url = abs(u); },
+        Response: function (b, o) { Object.assign(this, o || {}); this.ok = (this.status || 200) < 400; this.headers = { get: () => ((o && o.headers) || {})['content-type'] }; this.clone = () => this; },
+        addEventListener() { }, navigator: { serviceWorker: null },
+      };
+      ctx.window = ctx; ctx.global = ctx;
+      vm.createContext(ctx);
+      vm.runInContext(swSrc, ctx, { filename: 'web/sw.js' });
+      const fire = async (t, ev) => {
+        const h = handlers[t]; if (!h) throw new Error('SW tidak memasang handler ' + t);
+        responded = null;                        // reset: supaya "tidak dijawab SW" bisa dibedakan dari sisa panggilan sebelumnya
+        let done = Promise.resolve();
+        h(Object.assign({
+          waitUntil: p => { done = Promise.resolve(p); },
+          respondWith: p => { done = Promise.resolve(p).then(r => { responded = r; return r; }); },
+        }, ev));
+        await done;
+        return responded;
+      };
+      return { ctx, cachesMap, fire, shell: () => Array.from(cachesMap.values())[0] };
+    }
+
+  const BIG = '/* ' + 'x'.repeat(900) + ' */';   // sehat = >= 400 B (di bawah itu dianggap terpotong)
+      let poisoned = true;                       // jaringan mengembalikan HTML utk game.js (kasus user)
+    const net = async (req) => {
+      if (/game\.js/.test(req.url)) return poisoned ? mkRes('./game.js', '<!doctype html><title>404</title>', HMTL) : mkRes('./game.js', BIG, JS);
+      if (/Icon_Freeze\.png/.test(req.url)) return mkRes('./assets/Icon_Freeze.png', '', HMTL, 404);
+      return mkRes(req.url, BIG, /\.css$/.test(req.url) ? 'text/css' : JS);
+    };
+    const sw = await bootSW(net);
+    respondedReset();
+    function respondedReset() { }
+    await sw.fire('install', {});
+    const shell = sw.shell()._m;
+    ok('SW install: file yang balasannya HTML untuk .js TIDAK disimpan (anti cache beracun)', !shell.has(ORIGIN + '/game.js'), [...shell.keys()].filter(k => /game/.test(k)));
+    ok('SW install: file sehat disimpan (game bisa offline)', shell.has(ORIGIN + '/uiKit.js') && shell.has(ORIGIN + '/index.html'), shell.size);
+    ok('SW install: satu aset 404 tidak membatalkan precache sisanya', shell.size >= 20 && !shell.has(ORIGIN + '/assets/Icon_Freeze.png'), shell.size);
+    ok('worthCaching() menolak HTML utk .js tapi menerima PNG', /function worthCaching/.test(sw.ctx.self ? swSrc : ''), '');
+
+    // cache lama yang terlanjur beracun -> harus dibuang saat request berikutnya, lalu pakai jaringan
+    shell.set(ORIGIN + '/game.js', mkRes('./game.js', '<!doctype html>', HMTL));
+    poisoned = false;
+    const res1 = await sw.fire('fetch', { request: { url: ORIGIN + '/game.js', method: 'GET', mode: 'no-cors' }, });
+      {
+        const now = shell.get(ORIGIN + '/game.js');
+        const typ = now ? String(now.headers.get('content-type')) : '(buang)';
+        ok('SW fetch: racun di cache tidak dipakai lagi (dibuang atau diganti respons sehat)', !now || /javascript/.test(typ), typ);
+      }
+    ok('SW fetch: permintaan game.js dijawab dari jaringan (200 javascript)', !!res1 && /javascript/.test(String(res1.headers.get('content-type'))), res1 && res1.status);
+    poisoned = true;
+    const res2 = await sw.fire('fetch', { request: { url: ORIGIN + '/uiKit.js', method: 'GET', mode: 'no-cors' } });
+    ok('SW fetch: cache sehat tetap dipakai (stale-while-revalidate)', !!res2 && shell.has(ORIGIN + '/uiKit.js'), res2 && res2.status);
+    poisoned = false;
+    const res3 = await sw.fire('fetch', { request: { url: ORIGIN + '/api/health', method: 'GET', mode: 'cors' } });
+    ok('SW tidak menyentuh /api/ (JWT/referral realtime -> selalu jaringan)', res3 === null, res3);
+    const res4 = await sw.fire('fetch', { request: { url: ORIGIN + '/room/poll?room=AB12', method: 'GET', mode: 'cors' } });
+    ok('SW tidak menyentuh /room/ (relay multiplayer realtime)', res4 === null, res4);
+    ok('VERSION service worker naik (cache versi lama dibuang saat activate)', /VERSION = 'v2\.3\.1/.test(swSrc), (swSrc.match(/VERSION = '([^']+)'/) || [])[1]);
+    ok('activate menghapus cache bernama lain', /keep\.indexOf\(k\) < 0/.test(swSrc) && /caches\.delete\(k\)/.test(swSrc), '');
+
+    /* ---------- 3) watchdog inline index.html: diagnosis + pemulihan mandiri ---------- */
+    const a = html.lastIndexOf('<script>', html.indexOf('Jaring pengaman boot LAPIS PERTAMA'));
+    const b = html.indexOf('</script>', html.indexOf('pengaman tidak pernah jadi sumber error', a) > 0 ? html.indexOf('pengaman tidak boleh menjadi sumber error baru', a) : a);
+    const inlineSrc = html.slice(a + 8, b);
+    const IDS = ['splash', 'splashErr', 'splashHelp', 'splashSpinner', 'splashPct', 'splashSkip', 'splashReload', 'splashDiag', 'splashDiagCopy', 'splashTip', 'menu'];
+    function El(tag, attrs) { this.tagName = String(tag).toUpperCase(); this._a = attrs || {}; this.className = ''; this.innerHTML = ''; this.textContent = ''; this.value = ''; this.onclick = null; this.style = {}; }
+    El.prototype.getAttribute = function (k) { return this._a[k] != null ? this._a[k] : null; };
+
+    function bootWatchdog(opt) {
+      const els = {}; for (const k of IDS) els[k] = new El('DIV', k === 'game' ? { src: 'game.js' } : {});
+      const srcs = ['config.example.js', 'config.js', 'uiKit.js', 'audioKit.js', 'particles.js', 'adsManager.js', 'referralSystem.js', 'apiKit.js', 'game.js'];
+      const scripts = srcs.map(s => new El('SCRIPT', { src: s }));
+      const doc = {
+        getElementById: k => els[k] || null,
+        getElementsByTagName: t => (t === 'script' ? scripts : []),
+        execCommand: () => true,
+      };
+      const store = Object.assign({}, opt.store || {});
+      const ctx = {
+        console: { log() { }, warn() { }, error() { } }, Promise, setTimeout, clearTimeout, setInterval, clearInterval, Date, JSON, String, Object, Array, RegExp, Math,
+        document: doc,
+        location: { protocol: opt.protocol || 'http:', host: 'localhost:8790', pathname: '/index.html', search: opt.search || '', href: 'http://localhost:8790/index.html', reload() { ctx.__reload = (ctx.__reload || 0) + 1; } },
+        navigator: { userAgent: 'ArenaTest/1.0 (seperti browser lama)', serviceWorker: opt.sw === false ? null : { controller: {}, getRegistrations: () => Promise.resolve([]) }, clipboard: null },
+        localStorage: { getItem: k => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); } },
+        addEventListener() { }, caches: { keys: () => Promise.resolve([]), delete: () => Promise.resolve(true) },
+        fetch: (u, o) => { (ctx.__fetched = ctx.__fetched || []).push({ u: String(u), o: o }); return Promise.resolve(opt.net(u)); },
+      };
+      for (const g of (opt.globals || [])) ctx[g] = {};
+      ctx.window = ctx;
+      vm.createContext(ctx);
+      vm.runInContext(inlineSrc, ctx, { filename: 'index.html:watchdog' });
+      return { ctx, els, store, scripts };
+    }
+    const ALL_BUT_GAME = ['BungUI', 'BungAudio', 'BungFX', 'AdsManager', 'ReferralSystem', 'BungAPI'];
+
+    {
+      const w = bootWatchdog({
+        store: { hs_bootfail: 'game|game' },                 // kegagalan yang sama sudah pernah tercatat
+        net: u => (/game\.js/.test(u) ? mkRes(u, '<!doctype html>' + 'z'.repeat(500), HMTL) : mkRes(u, BIG, JS)),
+        globals: ALL_BUT_GAME,
+      });
+      ok('watchdog terpasang tanpa bergantung file lain (window.BungBootInline)', typeof w.ctx.BungBootInline === 'object' && typeof w.ctx.BungBootInline.diag === 'function');
+      ok('watchdog mengenali HANYA file yang globalnya belum ada ("game")', JSON.stringify(w.ctx.BungBootInline.missing()) === '["game"]', w.ctx.BungBootInline.missing());
+      w.ctx.BungBootInline.show();
+      await new Promise(r => setTimeout(r, 120));
+      ok('panel bantuan dibuka (class show) — tidak mungkin diam selamanya', w.els.splashHelp.className === 'show', w.els.splashHelp.className);
+      ok('#splashErr menyebut cache Service Worker yang rusak (bukan sekadar "coba lagi")', /cache Service Worker yang rusak/.test(w.els.splashErr.innerHTML) && /game/.test(w.els.splashErr.innerHTML), w.els.splashErr.innerHTML.slice(0, 120));
+      ok('persen loading diganti "MEMUAT TERHANBAT" + spinner mode lambat', w.els.splashPct.textContent === 'MEMUAT TERHANBAT' && w.els.splashSpinner.className === 'spinner slow', [w.els.splashPct.textContent, w.els.splashSpinner.className]);
+      ok('kotak diagnosis terisi (alamat, UA, hasil cek tiap file, error)', /hasil periksa file/.test(w.els.splashDiag.value) && /RUSAK\s+game\.js/.test(w.els.splashDiag.value) && /userAgent/.test(w.els.splashDiag.value), w.els.splashDiag.value.split('\n').length);
+      ok('baris OK/404/RUSAK per file: config.js tidak ikut diperiksa', /OK\s+game\.js|OK\s+uiKit\.js/.test(w.els.splashDiag.value) && !/config\.js/.test(w.els.splashDiag.value), (w.els.splashDiag.value.match(/\n  \S+ +\S+/g) || []).slice(0, 3));
+      ok('probe memakai cache:"no-store" (tidak ikut terbawa cache lama)', (w.ctx.__fetched || []).every(f => f.o && f.o['cache'] === 'no-store') && (w.ctx.__fetched || []).length >= 7, (w.ctx.__fetched || []).length);
+      ok('tombol SALIN diagnosis dipasang', typeof w.els.splashDiagCopy.onclick === 'function', typeof w.els.splashDiagCopy.onclick);
+      await new Promise(r => setTimeout(r, 1000));
+      ok('kegagalan yang sama 2x beruntun -> perbaikan mandiri dimulai (tanpa klik)', /Memperbaiki sendiri/.test(w.els.splashTip.innerHTML), w.els.splashTip.innerHTML);
+      await new Promise(r => setTimeout(r, 3200));
+      ok('perbaikan mandiri benar-benar reload dengan ?nosw=1&fresh=', /nosw=1&fresh=\d+/.test(String(w.ctx.location.href)), w.ctx.location.href);
+    }
+    {
+      const w = bootWatchdog({ net: u => (/game\.js/.test(u) ? mkRes(u, 'x', JS, 404) : mkRes(u, BIG, JS)), globals: ALL_BUT_GAME });
+      w.ctx.BungBootInline.show();
+      await new Promise(r => setTimeout(r, 120));
+      ok('kasus file hilang: pesan mengajak menjalankan server / cek folder web/', /node web\/net-server\.js/.test(w.els.splashErr.innerHTML) && /HTTP 404/.test(w.els.splashDiag.value), w.els.splashErr.innerHTML.slice(0, 100));
+      ok('kasus file hilang: tombol jadi COBA MUAT ULANG (bukan LANJUTKAN palsu)', /COBA MUAT ULANG/.test(w.els.splashSkip.textContent), w.els.splashSkip.textContent);
+      ok('tanda tangan kegagalan disimpan utk Percobaan berikutnya', /^game\|game$/.test(String(w.store.hs_bootfail)), w.store.hs_bootfail);
+    }
+    {
+      const w = bootWatchdog({ net: u => mkRes(u, BIG, JS), globals: ALL_BUT_GAME.concat(['hideSeekGame']) });
+      ok('semua global ada -> missing() kosong (watchdog tidak berisik)', JSON.stringify(w.ctx.BungBootInline.missing()) === '[]', w.ctx.BungBootInline.missing());
+      w.ctx.BungBootInline.dismiss();
+      w.ctx.BungBootInline.show();
+      await new Promise(r => setTimeout(r, 80));
+      ok('dismiss() (dipanggil game.js) membungkam panel selamanya', w.els.splashHelp.className === '' && w.els.splashErr.innerHTML === '', [w.els.splashHelp.className, w.els.splashErr.innerHTML]);
+    }
+    {
+      const w = bootWatchdog({ protocol: 'file:', net: u => { throw new Error('tidak ada fetch di file://'); }, globals: ALL_BUT_GAME });
+      await new Promise(r => setTimeout(r, 120));
+      ok('dibuka lewat file:// -> panel muncul SEKETIKA (tidak menunggu 9 dtk)', w.els.splashHelp.className === 'show' && /file/.test(w.els.splashErr.innerHTML) && /node web\/net-server\.js/.test(w.els.splashErr.innerHTML), w.els.splashErr.innerHTML.slice(0, 90));
+    }
+    ok('index.html: elemen diagnosis ada di DOM (#splashDiag + #splashDiagCopy)', /id="splashDiag"/.test(html) && /id="splashDiagCopy"/.test(html), '');
+    ok('ui.css: kotak diagnosis mono + user-select:all (bisa disalin di HP)', /#splashDiag\{[^}]*ui-monospace[^}]*user-select:all/.test(rd('web/ui.css')), '');
+    ok('game.js: ?nosw=1 melepas SW aktif + kosongkan cache lalu reload sekali', /hs_nosw_done/.test(rd('web/game.js')) && /nosw=1\/.test\(location\.search\)/.test(rd('web/game.js')).toString ? /nosw=1/.test(rd('web/game.js')) : false, '');
+  }
+
 
   console.log('\n' + (fail ? '\x1b[31m' : '\x1b[32m') + `=== web_boot_test: ${pass} PASS, ${fail} FAIL ===\x1b[0m`);
   if (fail) { console.log('gagal: ' + failNames.join('\n  gagal: ')); process.exitCode = 1; }

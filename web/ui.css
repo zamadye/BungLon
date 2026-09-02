@@ -428,6 +428,7 @@ tr.me td{background:rgba(61,220,132,.14);font-weight:900;border-radius:8px}
    2) Panel akun memakai token yang sama dengan design system di atas
       (satu warna = satu makna: biru = info/net, oranye = koin, ungu = aksi sosial).
    ========================================================================== */
+#splashDiag{width:100%;box-sizing:border-box;margin:8px 0 0;background:rgba(8,10,14,.62);color:#dfe6ee;border:1px solid rgba(255,255,255,.16);border-radius:10px;font:11px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre;overflow:auto;resize:vertical;user-select:all;-webkit-user-select:all;padding:8px}
 #splashHelp{display:none;flex-direction:column;align-items:center;gap:8px;max-width:min(420px,92vw)}
 #splashHelp.show{display:flex;animation:fadeUp .25s ease}
 #splashErr{color:#ffd8a8;font-weight:700;max-width:40ch}

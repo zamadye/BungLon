@@ -150,4 +150,4 @@
   /* ekspor ganda: browser (window.BungFX) + node (require utk tools/web_ui_test.js) */
   root.BungFX = Particles;
   if (typeof module !== 'undefined' && module.exports) module.exports = { Particles, KINDS };
-})(typeof window !== 'undefined' ? window : globalThis);
+})(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this));

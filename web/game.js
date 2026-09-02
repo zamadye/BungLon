@@ -969,6 +969,26 @@ if (typeof document !== 'undefined') (function boot() {
   if (splashSkipBtn) splashSkipBtn.onclick = () => { settleBoot('skipped'); };
   const splashReloadBtn = document.getElementById('splashReload');
   if (splashReloadBtn) splashReloadBtn.onclick = () => hardReload();
+  /**
+   * `?nosw=1` dulunya hanya "jangan daftarkan SW" — Service Worker yang SUDAH aktif tetap
+   * mencegat semua request, jadi flag itu tidak menyembuhkan apa pun. Sekarang: sekali jalan
+   * (ditandai sessionStorage) lepas registrations + kosongkan cache lalu muat ulang bersih.
+   */
+  (function noswHeal() {
+    try {
+      if (typeof sessionStorage === 'undefined' || !/nosw=1/.test(location.search)) return;
+      if (sessionStorage.getItem('hs_nosw_done')) return;
+      if (typeof navigator === 'undefined' || !navigator.serviceWorker || !navigator.serviceWorker.getRegistrations) return;
+      navigator.serviceWorker.getRegistrations().then(rs => {
+        let n = 0;
+        const done = () => { if (--n <= 0) { sessionStorage.setItem('hs_nosw_done', '1'); setTimeout(() => { try { location.reload(); } catch (e) { } }, 60); } };
+        n = (rs || []).length + 1;
+        if (typeof caches !== 'undefined' && caches.keys) caches.keys().then(ks => { for (const k of (ks || [])) caches.delete(k); }).catch(() => { });
+        for (const r of (rs || [])) { try { r.onupdate = done; r.unregister().then(done, done); } catch (e) { done(); } }
+        done();
+      }).catch(() => { });
+    } catch (e) { /* browser tanpa Cache API */ }
+  })();
   /** Progres loading di splash (blueprint: Splash Screen = logo + indikator). */
   const SPLASH_TIPS = [
     'Tekan <span class="kbd">1</span> untuk menyatu dengan lantai.',
@@ -2176,7 +2196,7 @@ if (typeof document !== 'undefined') (function boot() {
     if (metaPaused) { return requestAnimationFrame(frame); }        // iklan tayang -> beku
     if (paused) { if (ROUND) draw(); return requestAnimationFrame(frame); }   // menu jeda -> bekukan simulasi
     if (ROUND && netMode !== 'client') { keyInput(); ROUND.step(dt); }
-    else if (ROUND) { keyInput(); ROUND.t += dt; ROUND.tickPhaseClient?.(); }
+    else if (ROUND) { keyInput(); ROUND.t += dt; if (ROUND.tickPhaseClient) ROUND.tickPhaseClient(); }
     if (parts) { parts.step(dt); dustStep(dt); }
     if (ROUND) { buildSkills(); hud(); if (!paused) camStep(dt); draw(); }
     requestAnimationFrame(frame);

@@ -105,9 +105,11 @@
          tidak boleh terjebak di layar loading (watchdog v2.3 di lapisan browser) -->
     <div id="splashHelp" class="hidden">
       <p class="note" id="splashErr">—</p>
+      <textarea id="splashDiag" rows="6" readonly spellcheck="false" aria-label="Diagnosis boot"></textarea>
       <div class="row">
         <button class="btn" id="splashSkip">LANJUTKAN (lewati file yang gagal)</button>
         <button class="btn ghost" id="splashReload">↻ MUAT ULANG BERSIH</button>
+        <button class="btn ghost sm" id="splashDiagCopy">SALIN DIAGNOSIS</button>
       </div>
     </div>
   </div>
@@ -342,60 +344,88 @@
 
 <script>
 /* =========================================================================================
-   Jaring pengaman boot LAPIS PERTAMA — sengaja ditulis inline di sini supaya tetap jalan
-   walau semua file lain gagal (404, server mati, cache service worker basi). Tidak memakai
-   file/modul apa pun dan tidak boleh melempar exception.
-   Gejala yang dibereskan: layar "MEMUAT…" menggantung selamanya tanpa penjelasan.
-   Bila lapisan game nanti berhasil dimuat (global hideSeekGame ada), ia mengambil alih
-   tombol-tombol ini + memanggil BungBootInline.dismiss() sehingga panel ini tidak muncul.
+   Jaring pengaman boot LAPIS PERTAMA — ditulis inline supaya tetap jalan walau semua file
+   lain gagal (404, server mati, Service Worker lama mengembalikan cache rusak, atau file
+   termuat tapi kodenya berhenti karena SyntaxError). Tidak memakai file/modul apa pun dan
+   tidak boleh melempar exception. Sintaksnya sengaja ES5-safe: pengaman ini harus hidup di
+   browser yang bahkan tidak kuat membaca lapisan game.
    ========================================================================================= */
 (function () {
   try {
     var LIMIT = 9000;                                  // ms: setelah ini panel bantuan pasti muncul
     // basename file -> global yang harus ada bila file-nya benar-benar dieksekusi
     var NEED = { uiKit: 'BungUI', audioKit: 'BungAudio', particles: 'BungFX', adsManager: 'AdsManager', referralSystem: 'ReferralSystem', apiKit: 'BungAPI', game: 'hideSeekGame' };
-    var t0 = Date.now(), timer = 0, shown = false;
+    var ERRS = [], FILES = [], t0 = Date.now(), timer = 0, shown = false, probeDone = false;
     function id(x) { return document.getElementById(x); }
-    /** Daftar <script src> yang ada di halaman (tanpa hardcode nama file). */
-    function wanted() {
-      var list = [], tags = document.getElementsByTagName('script');
+    function esc(v) { return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;'); }
+    function push(msg) { if (msg && ERRS.length < 14) ERRS.push(String(msg)); }
+    /** daftar <script src> halaman (tanpa hardcode nama file) */
+    function scripts() {
+      var out = [], tags = document.getElementsByTagName('script');
       for (var i = 0; i < tags.length; i++) {
         var s = String(tags[i].getAttribute('src') || '');
-        if (s) list.push(s.replace(/[?#].*$/, '').replace(/^.*\//, '').replace(/\.[a-zA-Z0-9]+$/, ''));
+        if (s && s.indexOf('config.js') < 0) out.push(s);
       }
-      return list;
+      return out;
     }
-    /** File yang seharusnya sudah memasang global tapi belum = tidak termuat atau error. */
+    function base(s) { return String(s).replace(/[?#].*$/, '').replace(/^.*\//, '').replace(/\.[a-zA-Z0-9]+$/, ''); }
+    /** file yang globalnya belum ada = tidak termuat ATAU kodenya berhenti di tengah jalan */
     function missing() {
-      var w = wanted(), m = [];
+      var w = scripts(), m = [];
       for (var i = 0; i < w.length; i++) {
-        var k = w[i];
+        var k = base(w[i]);
         if (NEED[k] && !(NEED[k] in window) && m.indexOf(k) < 0) m.push(k);
       }
       return m;
     }
-    function show() {
-      if (shown) return; shown = true;
-      if (timer) { clearInterval(timer); timer = 0; }
-      var m = missing(), e = id('splashErr'), h = id('splashHelp'), sp = id('splashSpinner'), pct = id('splashPct');
-      if (pct) pct.textContent = 'MEMUAT TERHANBAT';
-      if (sp) sp.className = 'spinner slow';
-      if (e) e.innerHTML = m.length
-        ? 'File ini tidak selesai dimuat: <b>' + m.join(', ') + '</b>.<br>Paling sering karena halaman dibuka sebagai file (alamat <b>file://</b>) atau server-nya mati. Jalankan <b>node web/net-server.js</b> lalu buka <b>http://localhost:8790/</b>.'
-        : 'Semua termuat tapi permainan belum mulai — tekan <b>F12</b> (tab Console) untuk melihat error-nya, lalu muat ulang bersih.';
-      if (h) h.className = 'show';
-      var sk = id('splashSkip'), rl = id('splashReload');
-      if (sk) {
-        if (m.length) { sk.textContent = '\u27f3 COBA MUAT ULANG'; sk.onclick = function () { location.reload(); }; }
-        else if (!sk.onclick) sk.onclick = function () {
-          var s = id('splash'); if (s) s.className = 'screen out';
-          var mn = id('menu'); if (mn) mn.className = 'screen on';
-        };
-      }
-      if (rl && !rl.onclick) rl.onclick = function () { wipe(); };
-      try { console.warn('[HideSeek] boot terhambat setelah ' + (Date.now() - t0) + 'ms; file yang belum ada:', m); } catch (err) { }
+    // ---- kumpulkan semua bukti error (capture phase: error <script>/<link> juga tertangkap)
+    addEventListener('error', function (ev) {
+      var t = ev && ev.target;
+      if (t && (t.tagName === 'SCRIPT' || t.tagName === 'LINK')) push('GAGAL MUAT ' + t.tagName + ': ' + (t.getAttribute('src') || t.getAttribute('href') || '?'));
+      else if (ev && ev.message) push(ev.message + '  @ ' + String(ev.filename || '?').split('/').pop() + ':' + ev.lineno + ':' + ev.colno);
+    }, true);
+    addEventListener('unhandledrejection', function (ev) {
+      var r = ev && ev.reason;
+      push('promise: ' + ((r && (r.message || (r.toString && r.toString()))) || String(r)));
+    });
+
+    /** Ambil tiap file lewat fetch (SAME as browser -> ikut dilihat apa yang dikembalikan SW). */
+    function probe(done) {
+      var files = scripts();
+      FILES = [];
+      if (typeof fetch !== 'function') { probeDone = true; done(FILES); return; }
+      var left = files.length;
+      if (!left) { probeDone = true; done(FILES); return; }
+      for (var i = 0; i < files.length; i++) (function (f) {
+        var t = Date.now();
+        var p;
+        try { p = fetch(f, { cache: 'no-store', credentials: 'same-origin' }); } catch (e) { p = Promise.reject(e); }
+        p.then(function (r) {
+          return r.text().then(function (b) {
+            FILES.push({ f: f, status: r.status, type: (r.headers && r.headers.get ? (r.headers.get('content-type') || '') : ''), bytes: b.length, ms: Date.now() - t, head: b.slice(0, 80).replace(/[\r\n]+/g, ' ') });
+            if (--left === 0) { probeDone = true; done(FILES); }
+          });
+        }).catch(function (e) {
+          FILES.push({ f: f, status: 0, err: (e && e.message) || String(e) });
+          if (--left === 0) { probeDone = true; done(FILES); }
+        });
+      })(files[i]);
     }
-    /** Bongkar service worker + kosongkan cache, lalu muat ulang tanpa cache (penawar "cache basi"). */
+    function verdict(row) {
+      if (row.status === 0) return 'MATI     ' + row.f + ' — ' + (row.err || 'tidak terambil') + ' (server tidak jalan / salah alamat)';
+      if (row.status >= 400) return '404      ' + row.f + ' — HTTP ' + row.status + ' (file tidak ada di folder yang dilayani)';
+      if (/text\/html/i.test(row.type || '')) return 'RUSAK    ' + row.f + ' — HTTP 200 tapi isinya HTML (' + row.bytes + ' B). Cache/Service Worker lama mengembalikan index.html, bukan file ini.';
+      if (/\.js$/i.test(row.f) && row.bytes < 400) return 'CACEK    ' + row.f + ' — cuma ' + row.bytes + ' B, file terpotong.';
+      return 'OK       ' + row.f + ' — HTTP ' + row.status + ', ' + row.bytes + ' B, ' + (row.type || '?') + ', ' + row.ms + 'ms';
+    }
+    function badRows() {
+      var out = [];
+      for (var i = 0; i < FILES.length; i++) if (!/^OK/.test(verdict(FILES[i]))) out.push(FILES[i]);
+      return out;
+    }
+    function storeGet(k) { try { return window.localStorage ? window.localStorage.getItem(k) : null; } catch (e) { return null; } }
+    function storeSet(k, v) { try { if (window.localStorage) window.localStorage.setItem(k, v); } catch (e) { } }
+    /** Bongkar service worker + kosongkan cache, lalu muat ulang tanpa cache. */
     function wipe() {
       try {
         if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) navigator.serviceWorker.getRegistrations().then(function (rs) {
@@ -410,16 +440,76 @@
       var q = location.search ? (location.search + '&') : '?';
       location.href = location.pathname + q + 'nosw=1&fresh=' + Date.now();
     }
+    function countWipe() {
+      var n = 3, tip = id('splashTip');
+      var iv = setInterval(function () {
+        if (tip) tip.innerHTML = 'Memperbaiki sendiri (buang Service Worker + cache): <b>' + n + '</b>';
+        n--;
+        if (n < 0) { clearInterval(iv); try { wipe(); } catch (e) { location.reload(); } }
+      }, 900);
+      if (iv && iv.unref) iv.unref();
+    }
+    function diagText() {
+      var L = ['BUNGLON! diagnosis boot (salin semuanya dan kirim)'];
+      L.push('alamat      : ' + location.href);
+      L.push('protokol    : ' + location.protocol + (location.protocol === 'file:' ? '  <= TIDAK BISA DIPAKAI, jalankan lewat server' : ''));
+      L.push('userAgent   : ' + String(navigator.userAgent || '').slice(0, 140));
+      L.push('serviceWorker : ' + (navigator.serviceWorker ? ('aktif=' + !!navigator.serviceWorker.controller) : 'tidak ada'));
+      L.push('waktu       : ' + (Date.now() - t0) + 'ms sejak halaman mulai');
+      L.push('file belum jalan: ' + (missing().join(', ') || '(kosong)'));
+      if (FILES.length) { L.push(''); L.push('hasil periksa file:'); for (var i = 0; i < FILES.length; i++) L.push('  ' + verdict(FILES[i])); }
+      if (ERRS.length) { L.push(''); L.push('error tertangkap:'); for (var j = 0; j < ERRS.length; j++) L.push('  ' + ERRS[j]); }
+      return L.join('\n');
+    }
+    function show() {
+      if (shown) return; shown = true;
+      if (timer) { clearInterval(timer); timer = 0; }
+      probe(function () {
+        var m = missing(), bad = badRows(), e = id('splashErr'), h = id('splashHelp'), sp = id('splashSpinner'), pct = id('splashPct'), ta = id('splashDiag');
+        if (pct) pct.textContent = 'MEMUAT TERHANBAT';
+        if (sp) sp.className = 'spinner slow';
+        var pois = FILES.filter(function (r) { return r.status === 200 && /text\/html/i.test(r.type || ''); });
+        var html = '';
+        if (pois.length) html = '<b>' + esc(pois.map(function (r) { return base(r.f); }).join(', ')) + '</b> terambil dari <b>cache Service Worker yang rusak</b>: HTTP 200 tapi isinya HTML. Tekan <b>MUAT ULANG BERSIH</b> (melepas SW + mengosongkan cache) — atau DevTools → Application → Service Workers → Unregister, lalu reload.';
+        else if (location.protocol === 'file:') html = 'Halaman dibuka sebagai <b>file</b> — canvas &amp; fetch diblokir browser. Jalankan servernya: <b>node web/net-server.js</b> lalu buka <b>http://localhost:8790/</b>.';
+        else if (bad.length) html = 'File tidak bisa diambil dari server: <b>' + esc(bad.map(function (r) { return base(r.f); }).join(', ')) + '</b>. Jalankan <b>node web/net-server.js</b> (lalu buka <b>http://localhost:8790/</b>), dan pastikan file-nya benar-benar ada di folder <b>web/</b>.';
+        else if (m.length) html = '<b>' + esc(m.join(', ')) + '</b> termuat (HTTP 200) tapi kodenya berhenti — biasanya <b>SyntaxError</b> karena browser terlalu lama (butuh Chrome/Edge 80+, Firefox 72+, Safari 13.1+). Lihat kotak diagnosis di bawah untuk barisnya.';
+        else html = 'Semua file termuat; permainan belum mulai. Error sebenarnya ada di kotak diagnosis / Console (F12).';
+        if (ERRS.length) html += '<br><b>' + esc(ERRS[0]).slice(0, 220) + '</b>';
+        if (e) e.innerHTML = html;
+        if (ta) ta.value = diagText();
+        if (h) h.className = 'show';
+        var sk = id('splashSkip'), rl = id('splashReload'), cp = id('splashDiagCopy');
+        if (sk) {
+          sk.textContent = bad.length ? '\u27f3 COBA MUAT ULANG' : 'LANJUTKAN (lewati file yang gagal)';
+          if (bad.length) sk.onclick = function () { location.reload(); };
+          else if (!sk.onclick) sk.onclick = function () {
+            var s = id('splash'); if (s) s.className = 'screen out';
+            var mn = id('menu'); if (mn) mn.className = 'screen on';
+          };
+        }
+        if (rl && !rl.onclick) rl.onclick = function () { wipe(); };
+        if (cp && !cp.onclick) cp.onclick = function () {
+          try {
+            if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(ta.value).then(function () { cp.textContent = '\u2713 TERSALIN'; }, function () { ta.select(); document.execCommand('copy'); cp.textContent = '\u2713 TERSALIN'; });
+            else { ta.select(); document.execCommand('copy'); cp.textContent = '\u2713 TERSALIN'; }
+          } catch (e2) { ta.select(); }
+        };
+        // pemulihan sendiri: kegagalan yang SAMA dua kali beruntun -> buang SW + cache tanpa disuruh
+        var sig = (m.join(',') + '|' + bad.map(function (r) { return base(r.f); }).join(',')) || 'unknown';
+        if (storeGet('hs_bootfail') === sig) { storeSet('hs_bootfail', ''); countWipe(); }
+        else storeSet('hs_bootfail', sig);
+        try { console.warn('[HideSeek] boot terhambat ' + (Date.now() - t0) + 'ms\n' + diagText()); } catch (err) { }
+      });
+    }
     window.BungBootInline = {
-      t0: t0, missing: missing, show: show, wipe: wipe, protocol: location.protocol,
+      t0: t0, missing: missing, show: show, wipe: wipe, diag: diagText, errors: ERRS, rows: FILES, protocol: location.protocol,
       dismiss: function () { shown = true; if (timer) { clearInterval(timer); timer = 0; } }
     };
-    // dua keadaan yang sudah pasti gagal -> jangan tunggu 9 detik
-    if (location.protocol === 'file:') { show(); }                       // dibuka sebagai file: canvas & fetch diblokir
-    else if (/fresh=|nosw=1/.test(location.search)) { /* mode pemulihan: biarkan apa adanya */ }
+    if (location.protocol === 'file:') show();                     // tidak usah menunggu: file:// memang tidak bisa
+    else if (/fresh=|nosw=1/.test(location.search)) { /* mode pemulihan: jangan dihakimi */ }
     else timer = setInterval(function () { if (Date.now() - t0 > LIMIT) show(); }, 250);
-    if (timer && timer.unref) timer.unref();           // jangan menahan proses node (dipakai tools/web_boot_harness.js)
-    addEventListener('error', function () { if (!('hideSeekGame' in window)) setTimeout(show, 700); });
+    if (timer && timer.unref) timer.unref();                        // jangan menahan proses node (tools/web_boot_harness.js)
   } catch (e) { /* pengaman tidak boleh menjadi sumber error baru */ }
 })();
 </script>

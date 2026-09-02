@@ -13,7 +13,7 @@
  * ========================================================================== */
 'use strict';
 
-const VERSION = 'v2.3-account-1';
+const VERSION = 'v2.3.1-safe';      // naikkan tiap ganti file shell: ini satu-satunya cara membuang cache lama
 const CACHE_SHELL = 'hideseek-shell-' + VERSION;
 const CACHE_ASSETS = 'hideseek-assets-' + VERSION;
 const CACHE_PAGES = 'hideseek-pages-' + VERSION;
@@ -33,12 +33,39 @@ const SHELL = [
 /** Jalur yang tidak boleh disentuh service worker (realtime / rahasia sesi). */
 const NO_CACHE = ['/room/', '/api/'];
 
+/**
+ * Respons .js/.css/.json yang dibalas HTML = server/SW mengembalikan halaman (404 yang
+ * dilembutkan jadi index.html). Menyimpan itu = game "stuck di loading" selamanya, jadi
+ * respons semacam ini DIBUANG, bukan di-cache.
+ */
+function worthCaching(u, res) {
+  const type = String((res && res.headers && res.headers.get ? res.headers.get('content-type') : '') || '').toLowerCase();
+  if (!/\.(js|css|json|webmanifest)(\?.*)?$/.test(String(u || ''))) return true;      // gambar/font: aman
+  if (!res || !res.ok) return false;
+  if (type.indexOf('text/html') >= 0) return false;                                    // HTML tersamar = racun
+  return type === '' || /javascript|ecmascript|json|css|text|manifest/.test(type);
+}
+
+/** Buang entri cache yang isinya racun (penawar cache lama tanpa harus install ulang). */
+async function saneHit(cache, req, u) {
+  if (!cache) return null;
+  let hit = null;
+  try { hit = await cache.match(req); } catch (e) { return null; }
+  if (!hit) return null;
+  if (worthCaching(u, hit)) return hit;
+  try { await cache.delete(req); } catch (e) { }
+  return null;
+}
+
 /* --------------------------------- install -------------------------------- */
 self.addEventListener('install', (e) => {
   e.waitUntil((async () => {
     const c = await caches.open(CACHE_SHELL);
-    // Satu file hilang (mis. config.js belum di-generate) tidak boleh membatalkan install.
-    await Promise.all(SHELL.map(u => c.add(new Request(u, { cache: 'reload' })).catch(() => null)));
+    // Satu file hilang (mis. config.js belum di-generate) tidak boleh membatalkan install,
+    // dan respons rusak (HTML untuk .js) tidak usah disimpan.
+    await Promise.all(SHELL.map(u => fetch(new Request(u, { cache: 'reload' }))
+      .then(r => (r && r.ok && worthCaching(u, r) ? c.put(u, r.clone()) : null))
+      .catch(() => null)));
     await self.skipWaiting();
   })());
 });
@@ -68,10 +95,11 @@ self.addEventListener('fetch', (e) => {
       try {
         const net = await fetch(req);
         const c = await caches.open(CACHE_PAGES);
-        try { await c.put(req, net.clone()); } catch (err) { /* private mode dsb. */ }
+        try { if (net && net.ok) await c.put(req, net.clone()); } catch (err) { /* private mode dsb. */ }
         return net;
       } catch (err) {
-        const hit = (await caches.match(req)) || (await caches.match('./index.html')) || (await caches.match('./'));
+        const pc = await caches.open(CACHE_PAGES);
+        const hit = (await saneHit(pc, req, 'index.html')) || (await caches.match('./index.html')) || (await caches.match('./'));
         return hit || new Response('offline — jalankan: node web/net-server.js', { status: 503, headers: { 'content-type': 'text/plain; charset=utf-8' } });
       }
     })());
@@ -85,11 +113,11 @@ self.addEventListener('fetch', (e) => {
   if (!isAsset) return;
   e.respondWith((async () => {
     const cache = await caches.open(url.pathname.indexOf('/assets/') >= 0 ? CACHE_ASSETS : CACHE_SHELL);
-    const hit = await caches.match(req);
-    if (hit) { fetch(req).then(res => { if (res && res.ok) cache.put(req, res.clone()).catch(() => { }); }).catch(() => { }); return hit; }
+    const hit = await saneHit(cache, req, url.pathname);            // cache lama yang rusak dibuang di sini
+    if (hit) { fetch(req).then(res => { if (res && res.ok && worthCaching(url.pathname, res)) cache.put(req, res.clone()).catch(() => { }); }).catch(() => { }); return hit; }
     try {
       const res = await fetch(req);
-      if (res && res.ok) cache.put(req, res.clone()).catch(() => { });
+      if (res && res.ok && worthCaching(url.pathname, res)) cache.put(req, res.clone()).catch(() => { });
       return res;
     } catch (err) {
       return new Response('', { status: 504, headers: { 'content-type': 'text/plain' } });
